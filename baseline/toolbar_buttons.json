@@ -1,0 +1,13 @@
+{
+  "schema": "lightoffice/toolbar@1",
+  "measured": "2026-09-07T16:33:01Z",
+  "threshold_pct": 20,
+  "removed_groups": {"collaboration_tab": 22, "plugins_tab": 4},
+  "method": "new Common.UI.Button declarations in the views that build the ribbon; declarations are an upper bound on visible buttons, but both sides of the ratio are counted identically",
+  "editors": [
+    {"editor":"documenteditor","total":112,"removed":26,"kept":86,"reduction_pct":23.2,"meets_threshold":true},
+    {"editor":"spreadsheeteditor","total":131,"removed":26,"kept":105,"reduction_pct":19.8,"meets_threshold":false},
+    {"editor":"presentationeditor","total":89,"removed":26,"kept":63,"reduction_pct":29.2,"meets_threshold":true},
+    {"editor":"pdfeditor","total":86,"removed":26,"kept":60,"reduction_pct":30.2,"meets_threshold":true}
+  ]
+}

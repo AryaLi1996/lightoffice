@@ -102,10 +102,15 @@ jobs:
         # SKIPPED/BLOCKED. The gate is that nothing reports FAIL.
         run: |
           set -o pipefail
+          # The delivery archive is one of the criteria and costs nothing to
+          # produce here, so make it rather than reporting its absence.
+          scripts/archive.sh --out artifacts
           LIGHTOFFICE_SRC=/nonexistent scripts/verify_ac.sh --json ac_report.json | tee ac.log
           fails=$(jq -r '.summary.fail' ac_report.json)
           echo "### Acceptance criteria" >> "$GITHUB_STEP_SUMMARY"
-          jq -r '"| " + .id + " | " + .verdict + " | " + .criterion + " |"' ac_report.json \
+          # .criteria[] — addressing the object itself produced one empty row,
+          # and did so with exit status 0, so the summary silently rendered blank.
+          jq -r '.criteria[] | "| " + .id + " | " + .verdict + " | " + .criterion + " |"' ac_report.json \
             | sed '1i | AC | Verdict | Criterion |\n|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
           if [ "$fails" -ne 0 ]; then
             echo "::error::$fails acceptance criteria failed"

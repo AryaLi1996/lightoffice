@@ -1,0 +1,24 @@
+{
+  "schema": "lightoffice/baseline@1",
+  "recorded": "2026-09-07T15:37:21Z",
+  "upstream_tag": "v9.4.0",
+  "measured_on": {
+    "cores": 4,
+    "memory_mb": 16075,
+    "note": "The performance targets are specified for a 2-core/2GB machine. Compare only against numbers measured on equivalent hardware."
+  },
+  "sizes": {
+    "dictionaries_bytes": 249434448,
+    "web_apps_bytes": 666124570,
+    "desktop_apps_bytes": 339549598,
+    "web_apps_png_bytes": 130312162,
+    "web_apps_svg_bytes": 2195001,
+    "locale_dir_count": 14
+  },
+  "binary_size_bytes": null,
+  "binary_hash": null,
+  "cold_start_time_ms": null,
+  "peak_memory_mb": null,
+  "binary_unavailable": "no built application found; run scripts/build_desktop.sh (blocked here: v8 sources are unreachable, see scripts/build_desktop.sh --check-only)",
+  "runtime_metrics_unavailable": "requires a built application; cold start and RSS cannot be measured without one"
+}
