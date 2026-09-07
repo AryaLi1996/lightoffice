@@ -25,7 +25,7 @@ for a in "$@"; do
     *) ARGS+=("$a") ;;
   esac
 done
-SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
+SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 WEB="$SRC/web-apps"
 OUTDIR="$ROOT/baseline"
 JOBS="$(nproc)"

@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}"
+SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 ART="$ROOT/artifacts"
 VERSION="$(sed -n 's/.*--version \(.*\)/\1/p' <<<"${*:-}")"
 [ -n "$VERSION" ] || VERSION="1.0.0"
@@ -80,12 +80,15 @@ else
 fi
 
 # ---------------------------------------------------------------- windows ---
-if [ "$OS" = "MINGW"* ] || [ "$OS" = "MSYS"* ] || [ "$OS" = "CYGWIN"* ]; then
-  ( cd "$SRC/desktop-apps/win-linux/package/windows" && cmd //c make_installer.bat )
-  built=$((built + 1))
-else
-  echo "  skip .exe — needs a Windows host (make_installer.bat, MSVC + Inno Setup)"
-fi
+case "$OS" in
+  MINGW*|MSYS*|CYGWIN*)
+    ( cd "$SRC/desktop-apps/win-linux/package/windows" && cmd //c make_installer.bat )
+    built=$((built + 1))
+    ;;
+  *)
+    echo "  skip .exe — needs a Windows host (make_installer.bat, MSVC + Inno Setup)"
+    ;;
+esac
 
 # ------------------------------------------------------------------ macos ---
 if [ "$OS" = "Darwin" ]; then

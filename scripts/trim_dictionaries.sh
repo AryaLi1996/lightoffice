@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${1:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
+SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 DICT="$SRC/dictionaries"
 BASELINE="$ROOT/baseline/dictionaries.baseline"
 

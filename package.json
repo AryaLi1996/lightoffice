@@ -1,0 +1,22 @@
+{
+  "name": "lightoffice",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Intranet-only lightweight build of ONLYOFFICE Desktop Editors, maintained as an idempotent overlay",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "scripts/lint.sh",
+    "test": "node --test \"tests/unit/**/*.test.js\"",
+    "test:integration": "node tests/coedit_browser.js",
+    "verify": "scripts/verify_ac.sh"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

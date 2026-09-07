@@ -28,6 +28,32 @@ node tests/coedit_browser.js              # 两个真实编辑器会话并发协
 scripts/test_filelock.sh                  # 并发写入 -> 423 Locked (AC 3.5)
 ```
 
+## CI / CD
+
+| 工作流 | 触发 | 作用 |
+|---|---|---|
+| `ci.yml` | push / PR | lint（shellcheck、`bash -n`、`node --check`、JSON/SVG/YAML、workflow 内嵌 shell）、单元测试、品牌资源可复现性、仅仓库内的验收判据 |
+| `integration.yml` | push to main / 每日 / 手动 | 拉起内网协作栈，跑 AC 3.1/3.3/3.4/3.5（真实编辑器并发协同 + 423 文件锁），上传证据 |
+| `release.yml` | tag `v*` / 手动 | **ubuntu + windows + macos 三平台矩阵**产出 `.deb` / `.exe` / `.dmg`，校验大小与 checksums，发布 GitHub Release |
+| `deploy.yml` | PR（仅校验）/ 手动 | 校验编排与地址一致性；`mode=deploy` 时经 SSH 部署到目标主机，失败自动回滚 |
+
+`release.yml` 是 **AC 5.1 的正解**：跨平台打包与宿主机绑定，`.exe` 需 Windows +
+MSVC/Inno Setup，`.dmg` 需 macOS + Xcode/codesign，单机无法伪造——托管 runner
+矩阵是受支持的产出方式。注意各 runner 上仍需能取到 v8，否则构建任务会在
+preflight 处停下并把原因写进 job summary。
+
+本地跑同一套检查：
+
+```bash
+scripts/lint.sh     # 与 CI lint 任务完全一致
+npm test            # 26 项单元测试
+scripts/verify_ac.sh
+```
+
+单元测试刻意覆盖**跨文件一致性**：内网地址同时写在编排文件、provider 配置、
+客户端默认值与部署文档四处，只有测试能挡住它们各自漂移——客户端指向一个
+栈已不再监听的地址时，现象看起来像网络故障而不是配置错误。
+
 ## 仓库结构
 
 | 路径 | 内容 |

@@ -26,7 +26,7 @@ while [ $# -gt 0 ]; do
     *) ARGS+=("$1"); shift ;;
   esac
 done
-SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
+SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 
 WEB="$SRC/web-apps"
 DESK="$SRC/desktop-apps"
@@ -48,8 +48,15 @@ OUTBIN="$(find_binary)"
 [ -n "$OUTBIN" ] || OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
 THEME="$WEB/apps/common/main/resources/themes/theme_lightwps.json"
 
-C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_B=$'\033[34m'; C_0=$'\033[0m'
-pass=0; fail=0; blocked=0; adjusted=0
+C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_B=$'\033[34m'
+C_C=$'\033[36m'; C_0=$'\033[0m'
+pass=0; fail=0; blocked=0; adjusted=0; skipped=0
+
+# Criteria that inspect the upstream ONLYOFFICE tree cannot be judged without
+# it. In CI that checkout is absent by design (it is ~3GB), so those report
+# SKIPPED rather than FAIL — a missing checkout is not a defect.
+HAVE_SRC=0
+[ -d "$SRC/web-apps" ] && [ -d "$SRC/desktop-apps" ] && HAVE_SRC=1
 ROWS=()
 
 json_str() { python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$1"; }
@@ -62,6 +69,7 @@ record() {
     FAIL)     colour="$C_R"; fail=$((fail+1)) ;;
     BLOCKED)  colour="$C_Y"; blocked=$((blocked+1)) ;;
     ADJUSTED) colour="$C_B"; adjusted=$((adjusted+1)) ;;
+    SKIPPED)  colour="$C_C"; skipped=$((skipped+1)) ;;
   esac
   printf '  %-5s %s%-8s%s %s\n' "$id" "$colour" "$verdict" "$C_0" "$head"
   [ -n "$ev" ] && printf '        %s\n' "$ev"
@@ -79,7 +87,9 @@ n_sub=$(grep -cE '^[ +U-]?[0-9a-f]{40} ' <<<"$ss")
 n_dirty=$(grep -c -- '-dirty' <<<"$ss")
 n_fatal=$(grep -ci 'fatal' <<<"$ss")
 n_uninit=$(grep -cE '^-[0-9a-f]{40}' <<<"$ss")
-if [ "$n_sub" -eq 6 ] && [ "$n_dirty" -eq 0 ] && [ "$n_fatal" -eq 0 ] && [ "$n_uninit" -eq 0 ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 1.1 SKIPPED "子模块状态需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ "$n_sub" -eq 6 ] && [ "$n_dirty" -eq 0 ] && [ "$n_fatal" -eq 0 ] && [ "$n_uninit" -eq 0 ]; then
   record 1.1 PASS "6 个子模块全部解析，无 -dirty 后缀，无 fatal" \
     "$(tr '\n' ';' <<<"$ss" | sed 's/;$//' | cut -c1-150)"
 else
@@ -96,7 +106,9 @@ n_cmake_own=$(find "$SRC" -name CMakeLists.txt -not -path "*/3dParty/*" 2>/dev/n
 n_pro=$(find "$SRC" -name '*.pro' -not -path "*/3dParty/*" 2>/dev/null | wc -l)
 n_pri=$(find "$SRC" -name '*.pri' -not -path "*/3dParty/*" 2>/dev/null | wc -l)
 n_cxx=$(find "$SRC/core" \( -name '*.cpp' -o -name '*.h' \) -not -path "*/3dParty/*" 2>/dev/null | wc -l)
-if [ "$n_cmake_own" -gt 50 ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 1.2 SKIPPED "构建系统统计需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ "$n_cmake_own" -gt 50 ]; then
   record 1.2 PASS "CMakeLists.txt 数量 $n_cmake_own > 50（已排除 3dParty）"
 else
   record 1.2 ADJUSTED "字面判据不成立：ONLYOFFICE 用 qmake 构建，不是 CMake" \
@@ -127,11 +139,15 @@ if [ -f "$idx" ]; then
   for k in theme_path menu_config_path cloud_provider_registry; do
     v=$(jq -r --arg k "$k" '.index[$k].path // empty' "$idx")
     [ -z "$v" ] && missing="$missing $k"
-    [ -n "$v" ] && [ ! -e "$SRC/$v" ] && missing="$missing $k(路径不存在)"
+    [ "$HAVE_SRC" -eq 1 ] && [ -n "$v" ] && [ ! -e "$SRC/$v" ] && missing="$missing $k(路径不存在)"
   done
   nkeys=$(jq '.index | length' "$idx")
   if [ -z "$missing" ]; then
-    record 1.5 PASS "code_index.json 含 3 个必需键且路径均存在" "共 $nkeys 个索引键，全部经 gen_code_index.py 校验"
+    if [ "$HAVE_SRC" -eq 1 ]; then
+      record 1.5 PASS "code_index.json 含 3 个必需键且路径均存在" "共 $nkeys 个索引键，全部经 gen_code_index.py 校验"
+    else
+      record 1.5 PASS "code_index.json 含 3 个必需键（未校验路径存在性）" "共 $nkeys 个索引键；无上游检出，跳过路径存在性校验"
+    fi
   else
     record 1.5 FAIL "code_index.json 缺键" "$missing"
   fi
@@ -142,7 +158,9 @@ fi
 # ============================================================== Ticket 2 =====
 section "Ticket 2 — UI/UX定制与品牌化"
 
-if [ -f "$THEME" ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 2.1 SKIPPED "主题安装校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ -f "$THEME" ]; then
   name=$(jq -r '.name' "$THEME")
   nkeys=$(jq '.colors | length' "$THEME")
   if [ "$name" = "轻量版WPS主题" ]; then
@@ -157,7 +175,9 @@ fi
 lit=$(grep -r "AI助手" "$WEB/apps" --include="*.js" 2>/dev/null | wc -l)
 collab_hidden=$(grep -rl "LIGHTOFFICE-OVERLAY-collab" "$WEB/apps" --include="Toolbar.js" 2>/dev/null | wc -l)
 plugins_off=$(grep -c "LIGHTOFFICE-OVERLAY-plugins" "$WEB/apps/common/main/lib/controller/Plugins.js" 2>/dev/null || echo 0)
-if [ "$collab_hidden" -eq 4 ] && [ "$plugins_off" -ge 1 ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 2.2 SKIPPED "菜单裁剪校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ "$collab_hidden" -eq 4 ] && [ "$plugins_off" -ge 1 ]; then
   record 2.2 ADJUSTED "字面判据恒真：\"AI助手\" 在 web-apps 中从未出现" \
     "字面: grep \"AI助手\" = $lit（裁剪前同样是 0，该判据不度量任何东西）。实质裁剪已完成: 4/4 编辑器隐藏协作页签 (collab_hidden=$collab_hidden)，插件宿主已禁用 (AI 助手是插件而非内置 UI)。"
 else
@@ -171,11 +191,20 @@ if [ -f "$SPLASH" ] && command -v identify >/dev/null; then
   ck=$(cksum "$SPLASH" | awk '{print $1}')
   colours=$(identify -format "%k" "$SPLASH" 2>/dev/null)
   installed="$DESK/win-linux/res/lightoffice/splash.png"
-  same=no
-  [ -f "$installed" ] && cmp -s "$SPLASH" "$installed" && same=yes
-  if [ "$dim" = "600x300" ] && [ "$sz" -gt 4000 ] && [ "${colours:-0}" -gt 50 ] && [ "$same" = yes ]; then
-    record 2.3 PASS "启动图 600x300，非占位图，已安装且内容一致" \
-      "cksum=$ck size=${sz}B 颜色数=$colours（占位图通常 <10）installed=$installed"
+  if [ "$HAVE_SRC" -eq 0 ]; then
+    same=skip; installed="(无上游检出，未校验安装副本)"
+  else
+    same=no
+    [ -f "$installed" ] && cmp -s "$SPLASH" "$installed" && same=yes
+  fi
+  if [ "$dim" = "600x300" ] && [ "$sz" -gt 4000 ] && [ "${colours:-0}" -gt 50 ] && [ "$same" != no ]; then
+    if [ "$same" = yes ]; then
+      record 2.3 PASS "启动图 600x300，非占位图，已安装且内容一致" \
+        "cksum=$ck size=${sz}B 颜色数=$colours（占位图通常 <10）installed=$installed"
+    else
+      record 2.3 PASS "启动图 600x300，非占位图" \
+        "cksum=$ck size=${sz}B 颜色数=$colours（占位图通常 <10）；$installed"
+    fi
   else
     record 2.3 FAIL "启动图不满足要求" "dim=$dim size=$sz colours=$colours installed_match=$same"
   fi
@@ -192,6 +221,8 @@ if [ -x "$OUTBIN" ]; then
   else
     record 2.4 FAIL "二进制未含指定公司名" "Ascensio=$asc"
   fi
+elif [ "$HAVE_SRC" -eq 0 ]; then
+  record 2.4 SKIPPED "品牌覆盖校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
 elif [ -f "$VP" ] && grep -q "LightOffice Technologies" "$VP"; then
   record 2.4 BLOCKED "需要构建产物才能 strings 校验；机制已单独验证" \
     "version_p.h 覆盖已安装（上游 vendor 钩子）。离线编译验证: 替换后 VER_COMPANYNAME_STR=\"LightOffice Technologies Co., Ltd.\"，且目标文件中 \"Ascensio System SIA\" 出现 0 次。"
@@ -199,7 +230,9 @@ else
   record 2.4 FAIL "品牌覆盖未安装" "$VP"
 fi
 
-if [ -f "$THEME" ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 2.5 SKIPPED "主题变量交叉校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ -f "$THEME" ]; then
   tmp=$(mktemp -d)
   jq -r '.colors | keys[]' "$THEME" | sort -u > "$tmp/theme_keys"
   grep -rhoE '\-\-[a-z0-9-]+' --include="*.less" --include="*.css" "$WEB/apps" 2>/dev/null \
@@ -266,8 +299,9 @@ if [ -f "$CO" ]; then
   sent=$(jq -r '[.sessions[].websockets[]? | select(.url|test("/doc/.*/c/")) | .sent] | add // 0' "$CO")
   recv=$(jq -r '[.sessions[].websockets[]? | select(.url|test("/doc/.*/c/")) | .received] | add // 0' "$CO")
   if [ -n "$wsurl" ] && [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ]; then
+    handshakes=$( [ -f "$LOGF" ] && grep -c "101 Switching Protocols" "$LOGF" || echo 0 )
     record 3.3 PASS "协同编辑 WebSocket 完成 101 升级并持续收发" \
-      "$wsurl（双方合计 sent=$sent received=$recv）；原始握手记录见 logs/console.log"
+      "$wsurl（双方合计 sent=$sent received=$recv）；$LOGF 中另有 $handshakes 条 101 握手记录"
   else
     record 3.3 FAIL "未捕获到有效的协同 WebSocket" "$CO"
   fi
@@ -282,11 +316,11 @@ if [ -f "$CO" ]; then
   a_cur=$(jq -r '[.sessions.Alice.websockets[]? | select(.url|test("/doc/.*/c/")) | .recvTypes[]] | index("cursor") // -1' "$CO")
   errs=$(jq -r '[.sessions[].events[] | select(startswith("onError"))] | length' "$CO")
   crdt_files=$(grep -rl "change set applied" "$SRC/core" "$SRC/sdkjs" 2>/dev/null | wc -l)
-  if [ "$a_recv" != "-1" ] && [ "$b_recv" != "-1" ] && [ "${errs:-1}" -eq 0 ]; then
+  if [ "$a_recv" != "-1" ] && [ "$b_recv" != "-1" ] && [ "$a_cur" != "-1" ] && [ "${errs:-1}" -eq 0 ]; then
     record 3.4 ADJUSTED "字面判据不成立：ONLYOFFICE 用 OT 而非 CRDT，且无该日志串" \
       "字面: \"change set applied\" 在 core/sdkjs 中出现于 $crdt_files 个文件（=0）；\"CRDT\" 的命中全部是测试夹具里的 base64 片段。实际机制是 Operational Transformation。等价判据已通过: 两个真实编辑器会话并发编辑同一文档，双方各自收到对方的 saveChanges 变更集（Alice 收到=是, Bob 收到=是），光标位置双向同步，且无 onError 事件（errs=$errs）。"
   else
-    record 3.4 FAIL "并发变更集未双向送达" "alice_recv=$a_recv bob_recv=$b_recv errors=$errs"
+    record 3.4 FAIL "并发变更集未双向送达" "alice_recv=$a_recv bob_recv=$b_recv alice_cursor=$a_cur errors=$errs"
   fi
 else
   record 3.4 BLOCKED "未运行协同测试" "tests/coedit_browser.js"
@@ -309,7 +343,9 @@ fi
 section "Ticket 4 — 轻量化与资源优化"
 
 DB="$ROOT/baseline/dictionaries.baseline"
-if [ -f "$DB" ] && [ -d "$SRC/dictionaries" ]; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 4.1 SKIPPED "词典体积校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ -f "$DB" ] && [ -d "$SRC/dictionaries" ]; then
   before=$(cat "$DB"); after=$(du -sb "$SRC/dictionaries" | cut -f1)
   pct=$(awk -v a="$after" -v b="$before" 'BEGIN{printf "%.1f", a*100.0/b}')
   keep=$(find "$SRC/dictionaries" -mindepth 1 -maxdepth 1 -type d | wc -l)
@@ -325,6 +361,9 @@ fi
 
 AR="$ROOT/baseline/asset_optimization.result"
 if [ -f "$AR" ]; then
+  # Written by scripts/optimize_assets.sh as key=value lines.
+  png_before=0; png_after=0; svg_before=0; svg_after=0; lossy=0
+  # shellcheck disable=SC1090  # generated at runtime, not a tracked file
   . "$AR"
   png_pct=$(awk -v b="$png_before" -v a="$png_after" 'BEGIN{printf "%.2f", (b-a)*100.0/b}')
   svg_pct=$(awk -v b="$svg_before" -v a="$svg_after" 'BEGIN{printf "%.2f", (b-a)*100.0/b}')
@@ -349,6 +388,8 @@ if [ -x "$OUTBIN" ]; then
   else
     record 4.3 FAIL "二进制未剥离符号" "$(file "$OUTBIN" | cut -c1-120)"
   fi
+elif [ "$HAVE_SRC" -eq 0 ]; then
+  record 4.3 SKIPPED "编译配置接入校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh 与 scripts/apply_build_flags.sh"
 elif [ -f "$PRI" ] && [ "$included" -ge 1 ]; then
   record 4.3 BLOCKED "需要构建产物才能 file 校验；编译配置已就位并单独验证" \
     "-Os -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,-s 已由 defaults.pri include；本机 gcc 验证: 未引用函数被 gc-sections 移除，file 报告 \"stripped\"。"
@@ -402,7 +443,9 @@ else
 fi
 
 DV="$ROOT/docs/DEVELOPER_GUIDE.md"
-if [ -f "$DV" ] && grep -q '^```mermaid' "$DV"; then
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record 5.5 SKIPPED "架构图类名交叉校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
+elif [ -f "$DV" ] && grep -q '^```mermaid' "$DV"; then
   tmp=$(mktemp)
   awk '/^```mermaid/,/^```$/' "$DV" | grep -oE '^[[:space:]]*C[A-Za-z_]+\[' | tr -d ' [' | sort -u > "$tmp"
   total=$(wc -l < "$tmp"); ok=0; bad=""
@@ -425,17 +468,17 @@ else
 fi
 
 # ================================================================ summary ====
-total=$((pass + fail + blocked + adjusted))
-printf '\n\033[1m汇总\033[0m  共 %d 项：%sPASS %d%s  %sADJUSTED %d%s  %sBLOCKED %d%s  %sFAIL %d%s\n' \
+total=$((pass + fail + blocked + adjusted + skipped))
+printf '\n\033[1m汇总\033[0m  共 %d 项：%sPASS %d%s  %sADJUSTED %d%s  %sBLOCKED %d%s  %sSKIPPED %d%s  %sFAIL %d%s\n' \
   "$total" "$C_G" "$pass" "$C_0" "$C_B" "$adjusted" "$C_0" \
-  "$C_Y" "$blocked" "$C_0" "$C_R" "$fail" "$C_0"
+  "$C_Y" "$blocked" "$C_0" "$C_C" "$skipped" "$C_0" "$C_R" "$fail" "$C_0"
 
 mkdir -p "$(dirname "$JSON_OUT")"
 {
   printf '{\n  "generated": "%s",\n' "$(date -u +%FT%TZ)"
   printf '  "upstream": %s,\n' "$(json_str "$SRC")"
-  printf '  "summary": {"total": %d, "pass": %d, "adjusted": %d, "blocked": %d, "fail": %d},\n' \
-    "$total" "$pass" "$adjusted" "$blocked" "$fail"
+  printf '  "summary": {"total": %d, "pass": %d, "adjusted": %d, "blocked": %d, "skipped": %d, "fail": %d},\n' \
+    "$total" "$pass" "$adjusted" "$blocked" "$skipped" "$fail"
   printf '  "criteria": [\n'
   for i in "${!ROWS[@]}"; do
     printf '    %s' "${ROWS[$i]}"

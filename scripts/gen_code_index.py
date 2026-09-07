@@ -14,7 +14,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.abspath(
     sys.argv[1] if len(sys.argv) > 1
-    else os.environ.get("LIGHTOFFICE_SRC", "/home/user/onlyoffice-src")
+    else os.environ.get("LIGHTOFFICE_SRC", os.path.join(os.path.dirname(ROOT), "onlyoffice-src"))
 )
 
 # key -> (relative path, what it is / why we touch it)

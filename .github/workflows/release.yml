@@ -1,0 +1,234 @@
+name: Release
+
+# Builds LightOffice installers on each target OS and publishes them as a
+# GitHub Release.
+#
+# This workflow is the answer to AC 5.1. Cross-platform packaging is host-bound
+# and cannot be faked from one machine: .deb needs Linux and dpkg-deb, .exe
+# needs Windows with MSVC and Inno Setup, .dmg needs macOS with Xcode and
+# codesign. A matrix of hosted runners is the supported way to produce all
+# three from one pipeline.
+#
+# Caveat worth knowing before running this: the ONLYOFFICE desktop build needs
+# v8, which is fetched with depot_tools from chromium.googlesource.com. On a
+# network where that host is blocked the build job stops there — run
+# scripts/build_desktop.sh --check-only first to see the dependency state on
+# your runners.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build (e.g. 1.0.0)"
+        required: true
+        default: "1.0.0"
+      publish:
+        description: "Publish a GitHub Release for the built artifacts"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  LIGHTOFFICE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
+jobs:
+  preflight:
+    name: Build preflight
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: Resolve version
+        run: |
+          v="${LIGHTOFFICE_VERSION#v}"
+          [ -n "$v" ] || { echo "::error::no version resolved"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "building version $v"
+
+      - name: Report dependency reachability
+        # Informational: names exactly which upstream dependency would stop the
+        # build on these runners, rather than letting it fail 40 minutes in.
+        run: |
+          for host in chromium.googlesource.com chrome-infra-packages.appspot.com github.com; do
+            code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "https://$host/" || true)
+            echo "$host -> HTTP ${code:-000}"
+          done
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+            artifact: WPS-Lite-linux-amd64.deb
+          - os: windows
+            runner: windows-latest
+            artifact: WPS-Lite-win-x64.exe
+          - os: macos
+            runner: macos-latest
+            artifact: WPS-Lite-mac-universal.dmg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            build-essential cmake p7zip-full autoconf libtool \
+            qtbase5-dev qtbase5-private-dev qttools5-dev libqt5svg5-dev \
+            libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
+            libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
+            libasound2-dev libatspi2.0-dev dpkg-dev
+
+      - name: Free disk space
+        if: matrix.os == 'linux'
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
+
+      - name: Bootstrap upstream sources
+        shell: bash
+        run: scripts/bootstrap.sh "$RUNNER_TEMP/onlyoffice-src"
+
+      - name: Fetch prebuilt CEF and bootstrap Python
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: scripts/fetch_prebuilts.sh || echo "::warning::prebuilt fetch incomplete; the build may not start"
+
+      - name: Apply the LightOffice overlay
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: |
+          scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
+          scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
+          scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
+
+      - name: Build preflight
+        id: pre
+        shell: bash
+        continue-on-error: true
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: scripts/build_desktop.sh --check-only
+
+      - name: Build the desktop editors
+        if: steps.pre.outcome == 'success'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: scripts/build_desktop.sh
+
+      - name: Package
+        if: steps.pre.outcome == 'success'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: scripts/package.sh --version "${{ needs.preflight.outputs.version }}"
+
+      - name: Report a skipped build
+        if: steps.pre.outcome != 'success'
+        run: |
+          echo "::warning::${{ matrix.os }} build skipped — preflight reported missing dependencies"
+          {
+            echo "### ${{ matrix.os }}: build skipped"
+            echo "Preflight found unmet dependencies. See the 'Build preflight' step."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: installer-${{ matrix.os }}
+          path: artifacts/*
+          if-no-files-found: warn
+
+  publish:
+    name: Publish release
+    needs: [preflight, build]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: installer-*
+          merge-multiple: true
+
+      - name: Verify AC 5.1 — all three installers, none of them a stub
+        id: check
+        run: |
+          shopt -s nullglob
+          cd dist
+          missing=0
+          for f in WPS-Lite-linux-amd64.deb WPS-Lite-win-x64.exe WPS-Lite-mac-universal.dmg; do
+            if [ -f "$f" ]; then
+              size=$(stat -c%s "$f")
+              mb=$((size / 1024 / 1024))
+              if [ "$mb" -lt 50 ]; then
+                echo "::error::$f is only ${mb}MB — under the 50MB floor, likely a broken package"
+                missing=1
+              else
+                echo "$f: ${mb}MB"
+              fi
+            else
+              echo "::warning::$f was not produced"
+              missing=1
+            fi
+          done
+          sha256sum WPS-Lite-* > checksums.txt 2>/dev/null || true
+          cat checksums.txt || true
+          echo "complete=$([ "$missing" -eq 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+      - name: Create the GitHub Release
+        # gh is preinstalled on hosted runners, so this avoids pulling in a
+        # third-party action for a two-line job.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.preflight.outputs.version }}
+          COMPLETE: ${{ steps.check.outputs.complete }}
+        run: |
+          cd dist
+          {
+            echo "LightOffice v$VERSION"
+            echo
+            if [ "$COMPLETE" != "true" ]; then
+              echo "**Incomplete release** - not every platform installer was produced."
+              echo "See the build job logs for which host failed preflight and why."
+              echo
+            fi
+            echo '```'
+            cat checksums.txt 2>/dev/null || echo "(no checksums)"
+            echo '```'
+          } > notes.md
+
+          prerelease=""
+          [ "$COMPLETE" = "true" ] || prerelease="--prerelease"
+
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" WPS-Lite-* checksums.txt \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            # shellcheck disable=SC2086  # prerelease is an intentional word split
+            gh release create "v$VERSION" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "LightOffice v$VERSION" \
+              --notes-file notes.md \
+              $prerelease \
+              WPS-Lite-* checksums.txt
+          fi
