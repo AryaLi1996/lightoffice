@@ -1,0 +1,16 @@
+{
+  "generated": "2026-09-07T16:20:04Z",
+  "upstream": "/home/user/onlyoffice-src",
+  "quick": true,
+  "summary": {"pass": 5, "fail": 0, "skip": 3, "missing": 0},
+  "checks": [
+    {"check":"shell + workflow lint","status":"PASS","note":"7s","log":"/home/user/lightoffice/baseline/checks/shell_+_workflow_lint.log"},
+    {"check":"unit tests","status":"PASS","note":"1s","log":"/home/user/lightoffice/baseline/checks/unit_tests.log"},
+    {"check":"version lock matches tree","status":"PASS","note":"0s","log":"/home/user/lightoffice/baseline/checks/version_lock_matches_tree.log"},
+    {"check":"zh locale coverage","status":"PASS","note":"1s","log":"/home/user/lightoffice/baseline/checks/zh_locale_coverage.log"},
+    {"check":"co-editing","status":"SKIP","note":"--quick","log":""},
+    {"check":"offline behaviour","status":"SKIP","note":"--quick","log":""},
+    {"check":"file locking","status":"SKIP","note":"--quick","log":""},
+    {"check":"acceptance criteria","status":"PASS","note":"7s","log":"/home/user/lightoffice/baseline/checks/acceptance_criteria.log"}
+  ]
+}

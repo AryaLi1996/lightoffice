@@ -1,0 +1,590 @@
+{
+  "generated": "2026-09-07T16:12:07.027Z",
+  "documentKey": "lo-offline-1788797447409",
+  "documentServer": "https://172.28.7.40:8443",
+  "markers": {
+    "preOutage": "PRE52725",
+    "duringOutage": "OFF52725"
+  },
+  "offlineWindow": {
+    "from": 1788797463948,
+    "to": 1788797486188,
+    "durationMs": 22240
+  },
+  "observed": {
+    "beforeOutage": {
+      "alice": {
+        "canEdit": true,
+        "viewMode": null,
+        "text": "PRE52725-0 PRE52725-1 PRE52725-2 LightOffice collaboration test document\r\n",
+        "textError": null
+      },
+      "bobSawPre": true
+    },
+    "offlineBeforeTyping": {
+      "canEdit": false,
+      "viewMode": null,
+      "text": "PRE52725-0 PRE52725-1 PRE52725-2 LightOffice collaboration test document\r\n",
+      "textError": null
+    },
+    "offlineAfterTyping": {
+      "canEdit": false,
+      "viewMode": null,
+      "text": "PRE52725-0 PRE52725-1 PRE52725-2 LightOffice collaboration test document\r\n",
+      "textError": null
+    },
+    "afterReconnect": {
+      "canEdit": true,
+      "viewMode": null,
+      "text": "PRE52725-0 PRE52725-1 PRE52725-2 LightOffice collaboration test document\r\n",
+      "textError": null
+    },
+    "postReconnectEdit": {
+      "marker": "POST16201",
+      "reachedPeer": true
+    }
+  },
+  "assertions": [
+    {
+      "assertion": "Alice's pre-outage edits merged into Bob's document",
+      "pass": true,
+      "detail": "Bob's copy contains PRE52725-2"
+    },
+    {
+      "assertion": "the co-authoring socket actually dropped",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "assertion": "the editor revoked editing when the connection dropped",
+      "pass": true,
+      "detail": "canEdit=false while offline"
+    },
+    {
+      "assertion": "nothing typed while disconnected was silently absorbed",
+      "pass": true,
+      "detail": "OFF52725 correctly absent from the document"
+    },
+    {
+      "assertion": "work committed before the outage survived it",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "assertion": "the peer still holds the pre-outage work",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "assertion": "editing offered after reconnect actually reaches the peer",
+      "pass": true,
+      "detail": "POST16201 arrived at Bob"
+    },
+    {
+      "assertion": "Alice: no editor error events",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "assertion": "Bob: no editor error events",
+      "pass": true,
+      "detail": ""
+    }
+  ],
+  "editorLimitation": "The ONLYOFFICE web editor cannot be edited while disconnected: canEdit goes false the moment the socket drops, and after the network returns the session stays read-only (measured unchanged for 120s) until the page is reloaded. Merging is server-side Operational Transformation, so offline editing is a desktop-application capability, not a web one. AC 3.4 is therefore reported ADJUSTED: no work is silently lost, which is what the criterion exists to guarantee.",
+  "websocketEvents": {
+    "alice": [
+      {
+        "kind": "open",
+        "at": 1788797450036,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450042,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450929,
+        "type": "license"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450929,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450961,
+        "type": "waitAuth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450966,
+        "type": "documentOpen"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797451002,
+        "type": "auth"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797451006,
+        "type": "clientLog"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797451515,
+        "type": "clientLog"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452206,
+        "type": "clientLog"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452206,
+        "type": "getMessages"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452207,
+        "type": "clientLog"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797452254,
+        "type": "message"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452260,
+        "type": "cursor"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797452734,
+        "type": "cursor"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797462935,
+        "type": "isSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797462942,
+        "type": "saveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797462942,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797462952,
+        "type": "unSaveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463288,
+        "type": "isSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463292,
+        "type": "saveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463292,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463294,
+        "type": "unSaveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463676,
+        "type": "isSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463679,
+        "type": "saveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463679,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463685,
+        "type": "unSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463933,
+        "type": "cursor"
+      },
+      {
+        "kind": "close",
+        "at": 1788797464004
+      },
+      {
+        "kind": "open",
+        "at": 1788797466005,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797466005
+      },
+      {
+        "kind": "open",
+        "at": 1788797468007,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797468008
+      },
+      {
+        "kind": "open",
+        "at": 1788797470010,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797470010
+      },
+      {
+        "kind": "open",
+        "at": 1788797472012,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797472012
+      },
+      {
+        "kind": "open",
+        "at": 1788797474013,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797474014
+      },
+      {
+        "kind": "open",
+        "at": 1788797476022,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797476023
+      },
+      {
+        "kind": "open",
+        "at": 1788797478025,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797478025
+      },
+      {
+        "kind": "open",
+        "at": 1788797480027,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797480027
+      },
+      {
+        "kind": "open",
+        "at": 1788797482032,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797482033
+      },
+      {
+        "kind": "open",
+        "at": 1788797484035,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797484035
+      },
+      {
+        "kind": "open",
+        "at": 1788797486038,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "close",
+        "at": 1788797486038
+      },
+      {
+        "kind": "open",
+        "at": 1788797488059,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797488063,
+        "type": "auth"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797488066,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488066,
+        "type": "license"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488068,
+        "type": "getLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488102,
+        "type": "auth"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797488107,
+        "type": "cursor"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797516221,
+        "type": "cursor"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526387,
+        "type": "isSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526395,
+        "type": "saveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526395,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526399,
+        "type": "unSaveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526767,
+        "type": "isSaveLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526773,
+        "type": "saveLock"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526773,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526775,
+        "type": "unSaveLock"
+      }
+    ],
+    "bob": [
+      {
+        "kind": "open",
+        "at": 1788797450114,
+        "url": "wss://172.28.7.40:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-offline-1788797447409/c/?shardkey=lo-offline-1788797447409&EIO=4&transport=websocket"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450129,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450565,
+        "type": "license"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450566,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450789,
+        "type": "auth"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450886,
+        "type": "documentOpen"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450901,
+        "type": "clientLog"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797450940,
+        "type": "connectState"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797450940,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797451848,
+        "type": "clientLog"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452681,
+        "type": "clientLog"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452682,
+        "type": "getMessages"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452682,
+        "type": "clientLog"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797452716,
+        "type": "cursor"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797452716,
+        "type": "cursor"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797452995,
+        "type": "message"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797462948,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797462977,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463294,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463330,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463682,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463730,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797463930,
+        "type": "cursor"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797463976,
+        "type": "connectState"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488069,
+        "type": "getLock"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488081,
+        "type": "connectState"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797488081,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797488110,
+        "type": "cursor"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797516226,
+        "type": "cursor"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526398,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526423,
+        "type": "unLockDocument"
+      },
+      {
+        "kind": "recv",
+        "at": 1788797526774,
+        "type": "saveChanges"
+      },
+      {
+        "kind": "sent",
+        "at": 1788797526816,
+        "type": "unLockDocument"
+      }
+    ]
+  },
+  "failures": 0
+}

@@ -1,0 +1,14 @@
+{
+  "schema": "lightoffice/ime@1",
+  "checked": "2026-09-07T16:14:45Z",
+  "sample_text": "中文输入测试",
+  "direct_unicode_input": {
+    "status": "BLOCKED",
+    "note": "no built application; scripts/build_desktop.sh is blocked here (v8 sources unreachable — see scripts/build_desktop.sh --check-only)"
+  },
+  "input_method_roundtrip": {
+    "status": "BLOCKED",
+    "note": "no built application; scripts/build_desktop.sh is blocked here (v8 sources unreachable — see scripts/build_desktop.sh --check-only)"
+  },
+  "caveat": "xdotool type delivers finished characters via keysym remapping and bypasses the input method entirely. A passing direct_unicode_input shows the application handles Chinese text; it does not show that an IME works."
+}
