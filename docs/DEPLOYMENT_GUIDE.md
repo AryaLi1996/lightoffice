@@ -82,8 +82,13 @@ docker exec -u www-data lightoffice-nextcloud php occ app:install onlyoffice
 docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="https://10.0.7.10:8443/"
 docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="https://10.0.7.10:8443/"
 docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice StorageUrl --value="https://10.0.7.10/"
-docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice jwt_secret --value="$(grep DOCSERVER_JWT_SECRET deploy/.env | cut -d= -f2)"
+docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice jwt_secret --value="$(grep '^DOCSERVER_JWT_SECRET=' deploy/.env | cut -d= -f2-)"
 ```
+
+> **注意 `^` 与 `-f2-`**：`deploy/.env` 中还有一行注释提到 `DOCSERVER_JWT_SECRET`，
+> 未加 `^` 锚定会同时匹配到注释行，把注释文本当成密钥写进去。
+> 症状是编辑器报 `errorCode -20 / The document security token is not correctly formed`，
+> 而错误信息完全不会提示密钥来源错了——这个坑我们实测踩过。
 
 ## 7. 确认信任域与文件锁
 

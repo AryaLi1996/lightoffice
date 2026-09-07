@@ -1,0 +1,15 @@
+# LightOffice upstream version lock
+# Regenerate with scripts/gen_version_lock.sh
+# Verify with scripts/verify_ac.sh (AC 1.1)
+
+UPSTREAM_REPO=https://github.com/ONLYOFFICE/DesktopEditors.git
+UPSTREAM_TAG=v9.4.0
+UPSTREAM_SHA=7b9cd379f428ce23c7ef9c93cbb93f1e3c75f613
+
+# submodule SHAs recorded by that tag
+SUBMODULE_CORE=b18715ae811aaa5cd9dae2dd9a4b9412d38b8b7b
+SUBMODULE_DESKTOP_APPS=bc46371aa062a7718cd90268e94c3d2b10ce3c51
+SUBMODULE_DESKTOP_SDK=6bd2051287a496ac1504214caca69a5729625696
+SUBMODULE_DICTIONARIES=d3223bbb777883db66ac3cd249f71c6ebdc992c7
+SUBMODULE_SDKJS=b2f0aa1d5ca8c82e827ff3af6577d8edf913a2e7
+SUBMODULE_WEB_APPS=1c8ca9987876bada73c0bde21367da09c0e1ed83

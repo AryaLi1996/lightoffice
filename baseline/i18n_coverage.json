@@ -1,0 +1,20 @@
+{
+  "minimum_required": 95,
+  "worst_coverage": 96.6,
+  "directories": [
+    {"dir":"web-apps/apps/documenteditor/embed/locale","translated":75,"total":77,"coverage":97.4},
+    {"dir":"web-apps/apps/documenteditor/forms/locale","translated":209,"total":212,"coverage":98.6},
+    {"dir":"web-apps/apps/documenteditor/main/locale","translated":4363,"total":4371,"coverage":99.8},
+    {"dir":"web-apps/apps/documenteditor/mobile/locale","translated":808,"total":810,"coverage":99.8},
+    {"dir":"web-apps/apps/pdfeditor/main/locale","translated":3040,"total":3080,"coverage":98.7},
+    {"dir":"web-apps/apps/presentationeditor/embed/locale","translated":57,"total":59,"coverage":96.6},
+    {"dir":"web-apps/apps/presentationeditor/main/locale","translated":3567,"total":3571,"coverage":99.9},
+    {"dir":"web-apps/apps/presentationeditor/mobile/locale","translated":542,"total":544,"coverage":99.6},
+    {"dir":"web-apps/apps/spreadsheeteditor/embed/locale","translated":57,"total":59,"coverage":96.6},
+    {"dir":"web-apps/apps/spreadsheeteditor/main/locale","translated":5278,"total":5284,"coverage":99.9},
+    {"dir":"web-apps/apps/spreadsheeteditor/mobile/locale","translated":863,"total":865,"coverage":99.8},
+    {"dir":"web-apps/apps/visioeditor/embed/locale","translated":58,"total":60,"coverage":96.7},
+    {"dir":"web-apps/apps/visioeditor/main/locale","translated":479,"total":481,"coverage":99.6},
+    {"dir":"web-apps/apps/visioeditor/mobile/locale","translated":190,"total":192,"coverage":99.0}
+  ]
+}
