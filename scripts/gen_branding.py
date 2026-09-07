@@ -23,11 +23,30 @@ INK = (61, 68, 77)
 GREY = (110, 118, 128)
 
 
+# Which package ships each face, so a failure says what to install.
+FONT_PACKAGES = {
+    LATIN: "fonts-dejavu-core",
+    LATIN_R: "fonts-dejavu-core",
+    CJK: "fonts-wqy-zenhei",
+}
+
+
 def font(path, size):
+    """Load a face, or fail.
+
+    Falling back to ImageFont.load_default() here would be worse than useless:
+    it renders at a fixed tiny bitmap size, so the splash still *builds* but
+    ships looking broken, and the output stops being reproducible across
+    machines. A missing font is a build environment problem and should say so.
+    """
     try:
         return ImageFont.truetype(path, size)
-    except OSError:
-        return ImageFont.load_default()
+    except OSError as exc:
+        pkg = FONT_PACKAGES.get(path, "the font package providing it")
+        raise RuntimeError(
+            f"required font not found: {path}\n"
+            f"install it with: apt-get install -y {pkg}"
+        ) from exc
 
 
 def vgradient(size, top, bottom):

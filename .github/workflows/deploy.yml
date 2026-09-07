@@ -58,19 +58,14 @@ jobs:
       - name: Compose file is schema-valid
         run: docker compose -f deploy/docker-compose.nextcloud.yml config >/dev/null
 
-      - name: Addresses agree across compose, client config and docs
-        # The same consistency tests CI runs; a rollout that changes an address
-        # in one place and not the others is the failure this catches.
+      - name: Addresses agree, and no credential is a hardcoded literal
+        # consistency.test.js asserts both: that the intranet address matches
+        # across compose, the provider config, the client defaults and the
+        # deployment guide, and that every credential is a ${VAR:-default}
+        # substitution. A grep cannot do the second reliably — "PASSWORD:"
+        # followed by the "-default" of ${VAR:-default} looks exactly like a
+        # hardcoded value to a regex.
         run: node --test "tests/unit/consistency.test.js"
-
-      - name: No secret literals in the compose file
-        run: |
-          if grep -nEi '(password|secret|token):[[:space:]]*[^$[:space:]]' \
-               deploy/docker-compose.nextcloud.yml; then
-            echo "::error::compose contains a hardcoded credential; use \${VAR:-default}"
-            exit 1
-          fi
-          echo "all credentials come from the environment"
 
   deploy:
     name: Deploy to ${{ github.event.inputs.environment }}

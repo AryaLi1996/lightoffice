@@ -63,8 +63,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Pillow
-        run: pip install --quiet pillow
+      - name: Install Pillow and the fonts the generator requires
+        # gen_branding.py now fails rather than substituting a fallback face,
+        # so the exact fonts have to be present for the output to match.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core fonts-wqy-zenhei
+          pip install --quiet pillow
 
       - name: Regenerate branding and diff against what is committed
         # gen_branding.py is declared deterministic. If a regeneration differs
