@@ -89,6 +89,22 @@ else
   skip "pyyaml not installed"
 fi
 
+hdr "cloudformation"
+if [ -d deploy/aws ]; then
+  if command -v cfn-lint >/dev/null; then
+    while IFS= read -r f; do
+      if out=$(cfn-lint "$f" 2>&1); then
+        ok "cfn-lint $f"
+      else
+        bad "cfn-lint $f"
+        printf '%s\n' "$out" | sed 's/^/      /' | head -20
+      fi
+    done < <(find deploy/aws -name '*.yaml' -o -name '*.yml' | sort)
+  else
+    skip "cfn-lint not installed (pip install cfn-lint)"
+  fi
+fi
+
 hdr "executable bits"
 while IFS= read -r f; do
   [ -x "$f" ] && ok "+x $f" || bad "$f is not executable"

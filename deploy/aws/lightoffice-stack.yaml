@@ -1,0 +1,488 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: >-
+  LightOffice intranet collaboration host. Creates a VPC with a private subnet
+  and one EC2 instance pinned to a fixed private address, running Nextcloud +
+  ONLYOFFICE Document Server + MariaDB on an encrypted data volume.
+
+  Why a fixed private IP matters here: the LightOffice desktop client has its
+  default portal address compiled in at build time, not configured at install.
+  If the server address can change, every client has to be rebuilt and
+  redistributed. So this stack pins the instance to HostPrivateIp (10.0.7.10 by
+  default), which is the address already baked into the client, and also
+  publishes a stable DNS name for anything that can be configured later.
+
+  The instance sits in a private subnet with no public IP. Reach it from the
+  corporate network over the optional VPN gateway, a Transit Gateway
+  attachment, or VPC peering; administer it through SSM Session Manager rather
+  than SSH, so no key pair or bastion is needed.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: "Client-facing addressing"}
+        Parameters: [HostPrivateIp, PrivateSubnetCidr, VpcCidr, PrivateDnsZone, HostName]
+      - Label: {default: "Access"}
+        Parameters: [CorporateCidr, AttachVpnGateway]
+      - Label: {default: "Instance"}
+        Parameters: [InstanceType, DataVolumeSizeGb, LatestAmiId]
+      - Label: {default: "Application"}
+        Parameters: [NextcloudAdminUser, ComposeRepoUrl, ComposeRepoRef]
+
+Parameters:
+  VpcCidr:
+    Type: String
+    Default: 10.0.0.0/16
+    AllowedPattern: ^(10|172|192)\.[0-9.]+/[0-9]{1,2}$
+    Description: VPC range. Must be RFC1918 and must not overlap your corporate network.
+
+  PrivateSubnetCidr:
+    Type: String
+    Default: 10.0.7.0/24
+    AllowedPattern: ^(10|172|192)\.[0-9.]+/[0-9]{1,2}$
+    Description: Subnet holding the host. Must contain HostPrivateIp.
+
+  HostPrivateIp:
+    Type: String
+    Default: 10.0.7.10
+    AllowedPattern: ^(10|172|192)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$
+    Description: >-
+      Fixed private address for the host. This is the address LightOffice
+      clients connect to, and it is compiled into them — changing it means
+      rebuilding and redistributing every client, so pick it deliberately.
+
+  CorporateCidr:
+    Type: String
+    AllowedPattern: ^(10|172|192)\.[0-9.]+/[0-9]{1,2}$
+    Description: >-
+      The only range allowed to reach the editors. Must be RFC1918: this host
+      holds company documents and is not meant to be internet-facing.
+
+  AttachVpnGateway:
+    Type: String
+    Default: "no"
+    AllowedValues: ["yes", "no"]
+    Description: >-
+      Create a Site-to-Site VPN gateway on the VPC. Choose "no" if you will
+      connect via Transit Gateway or VPC peering instead.
+
+  InstanceType:
+    Type: String
+    Default: m6i.large
+    AllowedValues: [t3.large, t3.xlarge, m6i.large, m6i.xlarge, m7i.large, m7i.xlarge]
+    Description: >-
+      Document Server is the memory-hungry component; 8 GB is a realistic floor
+      for a small team, which is why nothing under *.large is offered.
+
+  DataVolumeSizeGb:
+    Type: Number
+    Default: 100
+    MinValue: 20
+    MaxValue: 16384
+    Description: Encrypted EBS volume for document storage and the database.
+
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Resolved at deploy time so the stack never pins a stale AMI.
+
+  PrivateDnsZone:
+    Type: String
+    Default: lightoffice.internal
+    Description: Private hosted zone created for this VPC.
+
+  HostName:
+    Type: String
+    Default: office
+    Description: Record name within the zone, e.g. office.lightoffice.internal.
+
+  NextcloudAdminUser:
+    Type: String
+    Default: lightadmin
+    MinLength: 3
+
+  ComposeRepoUrl:
+    Type: String
+    Default: https://github.com/AryaLi1996/lightoffice.git
+    Description: Repository the host clones to obtain deploy/docker-compose.nextcloud.yml.
+
+  ComposeRepoRef:
+    Type: String
+    Default: main
+
+Conditions:
+  WantVpn: !Equals [!Ref AttachVpnGateway, "yes"]
+
+Resources:
+  # ------------------------------------------------------------------ network
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCidr
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-vpc"}]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-igw"}]
+
+  IgwAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  # Public subnet exists only to host the NAT gateway. Nothing in it serves
+  # traffic; the application host has no public address.
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Select [0, !Cidr [!Ref VpcCidr, 16, 8]]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-public"}]
+
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: !Ref PrivateSubnetCidr
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-private"}]
+
+  NatEip:
+    Type: AWS::EC2::EIP
+    DependsOn: IgwAttachment
+    Properties:
+      Domain: vpc
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-nat"}]
+
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NatEip.AllocationId
+      SubnetId: !Ref PublicSubnet
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-nat"}]
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-public"}]
+
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IgwAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-private"}]
+
+  # Egress only — needed to pull container images and OS updates.
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnetAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  VpnGateway:
+    Type: AWS::EC2::VPNGateway
+    Condition: WantVpn
+    Properties:
+      Type: ipsec.1
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-vgw"}]
+
+  VpnGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: WantVpn
+    Properties:
+      VpcId: !Ref Vpc
+      VpnGatewayId: !Ref VpnGateway
+
+  VpnRoutePropagation:
+    Type: AWS::EC2::VPNGatewayRoutePropagation
+    Condition: WantVpn
+    DependsOn: VpnGatewayAttachment
+    Properties:
+      RouteTableIds: [!Ref PrivateRouteTable]
+      VpnGatewayId: !Ref VpnGateway
+
+  # ----------------------------------------------------------------- security
+  HostSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: LightOffice editors, reachable from the corporate network only
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - Description: Nextcloud (document storage and the client's portal)
+          IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !Ref CorporateCidr
+        - Description: ONLYOFFICE Document Server (co-editing, incl. the WebSocket)
+          IpProtocol: tcp
+          FromPort: 8081
+          ToPort: 8081
+          CidrIp: !Ref CorporateCidr
+      SecurityGroupEgress:
+        - Description: Container image pulls and OS updates via NAT
+          IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-host"}]
+
+  AppSecrets:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${AWS::StackName}/app"
+      Description: Database, admin and Document Server JWT credentials
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"NEXTCLOUD_ADMIN_USER":"${NextcloudAdminUser}"}'
+        GenerateStringKey: DB_PASSWORD
+        PasswordLength: 32
+        ExcludePunctuation: true
+
+  # The generated secret only fills one key, so the remaining credentials are
+  # derived on the host at first boot and written back (see UserData).
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: {Service: ec2.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # Session Manager access, so the host needs no SSH key and no bastion.
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-app-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue, secretsmanager:PutSecretValue]
+                Resource: !Ref AppSecrets
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-host"}]
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # -------------------------------------------------------------- persistence
+  DataVolume:
+    Type: AWS::EC2::Volume
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      AvailabilityZone: !GetAtt PrivateSubnet.AvailabilityZone
+      Size: !Ref DataVolumeSizeGb
+      VolumeType: gp3
+      Encrypted: true
+      Tags: [{Key: Name, Value: !Sub "${AWS::StackName}-data"}]
+
+  DataVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Properties:
+      InstanceId: !Ref Host
+      VolumeId: !Ref DataVolume
+      Device: /dev/sdf
+
+  # -------------------------------------------------------------------- host
+  Host:
+    Type: AWS::EC2::Instance
+    Metadata:
+      Comment: >-
+        PrivateIpAddress is the load-bearing property here — it is what makes
+        the address compiled into the desktop clients keep working across
+        instance restarts.
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PrivateSubnet
+      PrivateIpAddress: !Ref HostPrivateIp
+      SecurityGroupIds: [!Ref HostSecurityGroup]
+      MetadataOptions:
+        HttpTokens: required          # IMDSv2 only
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 30
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - {Key: Name, Value: !Sub "${AWS::StackName}-host"}
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee /var/log/lightoffice-bootstrap.log) 2>&1
+
+          dnf -y update
+          dnf -y install docker git jq
+          systemctl enable --now docker
+
+          # Compose v2 as a CLI plugin.
+          install -d /usr/libexec/docker/cli-plugins
+          curl -fsSL -o /usr/libexec/docker/cli-plugins/docker-compose \
+            https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64
+          chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+
+          # Persist documents and the database on the encrypted volume, not on
+          # the root disk, so the instance stays disposable.
+          for _ in $(seq 1 30); do [ -e /dev/sdf ] && break; sleep 5; done
+          DEV=$(readlink -f /dev/sdf)
+          blkid "${!DEV}" >/dev/null 2>&1 || mkfs.xfs "${!DEV}"
+          mkdir -p /var/lib/lightoffice
+          grep -q /var/lib/lightoffice /etc/fstab || \
+            echo "UUID=$(blkid -s UUID -o value "${!DEV}") /var/lib/lightoffice xfs defaults,nofail 0 2" >> /etc/fstab
+          mount -a
+          # Docker keeps all named volumes here, which puts both Nextcloud's
+          # files and MariaDB's data on the encrypted volume.
+          systemctl stop docker
+          mkdir -p /var/lib/lightoffice/docker
+          if [ ! -L /var/lib/docker ]; then
+            [ -d /var/lib/docker ] && cp -a /var/lib/docker/. /var/lib/lightoffice/docker/ || true
+            rm -rf /var/lib/docker && ln -s /var/lib/lightoffice/docker /var/lib/docker
+          fi
+          systemctl start docker
+
+          git clone --depth 1 --branch ${ComposeRepoRef} ${ComposeRepoUrl} /opt/lightoffice
+          cd /opt/lightoffice
+
+          # Fill in the credentials that GenerateSecretString did not create,
+          # then write them back so a rebuilt host reuses the same values —
+          # the Document Server JWT in particular must match on both sides.
+          SECRET=$(aws secretsmanager get-secret-value --secret-id ${AppSecrets} \
+                     --query SecretString --output text --region ${AWS::Region})
+          upd() { jq -r --arg k "$1" '.[$k] // empty' <<<"${!SECRET}"; }
+          DB_PASSWORD=$(upd DB_PASSWORD)
+          DB_ROOT_PASSWORD=$(upd DB_ROOT_PASSWORD); [ -n "${!DB_ROOT_PASSWORD}" ] || DB_ROOT_PASSWORD=$(openssl rand -hex 24)
+          NEXTCLOUD_ADMIN_PASSWORD=$(upd NEXTCLOUD_ADMIN_PASSWORD); [ -n "${!NEXTCLOUD_ADMIN_PASSWORD}" ] || NEXTCLOUD_ADMIN_PASSWORD=$(openssl rand -hex 24)
+          DOCSERVER_JWT_SECRET=$(upd DOCSERVER_JWT_SECRET); [ -n "${!DOCSERVER_JWT_SECRET}" ] || DOCSERVER_JWT_SECRET=$(openssl rand -hex 32)
+
+          aws secretsmanager put-secret-value --secret-id ${AppSecrets} --region ${AWS::Region} \
+            --secret-string "$(jq -n \
+              --arg a "${NextcloudAdminUser}" --arg b "${!DB_PASSWORD}" \
+              --arg c "${!DB_ROOT_PASSWORD}" --arg d "${!NEXTCLOUD_ADMIN_PASSWORD}" \
+              --arg e "${!DOCSERVER_JWT_SECRET}" \
+              '{NEXTCLOUD_ADMIN_USER:$a, DB_PASSWORD:$b, DB_ROOT_PASSWORD:$c, NEXTCLOUD_ADMIN_PASSWORD:$d, DOCSERVER_JWT_SECRET:$e}')"
+
+          umask 077
+          cat > deploy/.env <<EOF
+          DB_ROOT_PASSWORD=${!DB_ROOT_PASSWORD}
+          DB_PASSWORD=${!DB_PASSWORD}
+          NEXTCLOUD_ADMIN_USER=${NextcloudAdminUser}
+          NEXTCLOUD_ADMIN_PASSWORD=${!NEXTCLOUD_ADMIN_PASSWORD}
+          DOCSERVER_JWT_SECRET=${!DOCSERVER_JWT_SECRET}
+          LIGHTOFFICE_PUBLIC_HOST=${HostPrivateIp}
+          EOF
+
+          docker compose -f deploy/docker-compose.nextcloud.yml pull
+          docker compose -f deploy/docker-compose.nextcloud.yml up -d
+
+          # Start the stack again automatically after a reboot.
+          cat > /etc/systemd/system/lightoffice.service <<EOF
+          [Unit]
+          Description=LightOffice collaboration stack
+          Requires=docker.service
+          After=docker.service network-online.target
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/opt/lightoffice
+          ExecStart=/usr/bin/docker compose -f deploy/docker-compose.nextcloud.yml up -d
+          ExecStop=/usr/bin/docker compose -f deploy/docker-compose.nextcloud.yml down
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable lightoffice.service
+
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} \
+            --resource Host --region ${AWS::Region} || true
+    CreationPolicy:
+      ResourceSignal:
+        # Document Server's first start is slow; give the bootstrap real time
+        # rather than reporting a false failure.
+        Timeout: PT30M
+        Count: 1
+
+  # ---------------------------------------------------------------------- dns
+  PrivateZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref PrivateDnsZone
+      VPCs:
+        - VPCId: !Ref Vpc
+          VPCRegion: !Ref AWS::Region
+      HostedZoneConfig:
+        Comment: !Sub "Private zone for ${AWS::StackName}"
+
+  HostRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref PrivateZone
+      Name: !Sub "${HostName}.${PrivateDnsZone}"
+      Type: A
+      TTL: "300"
+      ResourceRecords: [!Ref HostPrivateIp]
+
+Outputs:
+  PortalUrl:
+    Description: >-
+      Address the LightOffice desktop client connects to. This must match
+      defaultPortal in overlay/desktop-apps/common/loginpage/src/lightoffice-cloud.js
+      at the time the client is built.
+    Value: !Sub "http://${HostPrivateIp}:8080"
+    Export: {Name: !Sub "${AWS::StackName}-PortalUrl"}
+
+  DocumentServerUrl:
+    Description: Address clients load the editor from, and where co-editing WebSockets terminate.
+    Value: !Sub "http://${HostPrivateIp}:8081"
+    Export: {Name: !Sub "${AWS::StackName}-DocumentServerUrl"}
+
+  PortalDnsUrl:
+    Description: Stable name for the same host, for anything configurable after install.
+    Value: !Sub "http://${HostName}.${PrivateDnsZone}:8080"
+
+  HostPrivateAddress:
+    Value: !Ref HostPrivateIp
+
+  InstanceId:
+    Value: !Ref Host
+
+  SessionManagerCommand:
+    Description: Administer the host without SSH or a bastion.
+    Value: !Sub "aws ssm start-session --target ${Host} --region ${AWS::Region}"
+
+  SecretArn:
+    Description: Generated credentials, including the Document Server JWT.
+    Value: !Ref AppSecrets

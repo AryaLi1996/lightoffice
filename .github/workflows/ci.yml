@@ -30,8 +30,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install PyYAML for workflow and compose validation
-        run: pip install --quiet pyyaml
+      - name: Install PyYAML and cfn-lint
+        # cfn-lint validates the CloudFormation stack the same way CI validates
+        # everything else, so a broken template fails here rather than at
+        # `aws cloudformation deploy` time.
+        run: pip install --quiet pyyaml cfn-lint
 
       - name: Run lint
         run: scripts/lint.sh

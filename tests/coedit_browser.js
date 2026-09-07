@@ -15,9 +15,17 @@
  *   - cursor positions are exchanged both ways                         (AC 3.4)
  *
  * Prerequisites: deploy/docker-compose.nextcloud.yml is up, and
- * tests/fixture_server.js is serving tests/fixtures on 10.0.7.1:8099.
+ * tests/fixture_server.js is serving tests/fixtures on the docker bridge
+ * gateway (172.28.7.1:8099) so the Document Server container can fetch the
+ * document and POST its callback.
  *
- *   node tests/coedit_browser.js [--docserver http://10.0.7.20] [--json out.json]
+ * --docserver is the address the BROWSER uses, so it must be the published
+ * host port rather than the container's bridge IP, which resolves only inside
+ * the docker host.
+ *
+ *   node tests/coedit_browser.js \
+ *     [--fixtures http://172.28.7.1:8099] [--docserver http://localhost:8081] \
+ *     [--json out.json]
  */
 'use strict';
 
@@ -31,7 +39,10 @@ function arg(name, fallback) {
 }
 
 const SECRET = process.env.JWT_SECRET || arg('--secret', 'lightoffice_jwt_secret');
-const FIXTURES = arg('--fixtures', 'http://10.0.7.1:8099');
+const FIXTURES = arg('--fixtures', 'http://172.28.7.1:8099');
+// Address the BROWSER loads the editor from: the Document Server's published
+// host port. A container bridge IP would not resolve outside the docker host.
+const DOCSERVER = arg('--docserver', process.env.LIGHTOFFICE_DOCSERVER || 'http://localhost:8081');
 const KEY = arg('--key', 'lo-coedit-' + Date.now());
 const JSON_OUT = arg('--json', 'baseline/coedit.json');
 const CHROME = arg('--chrome', process.env.CHROME_PATH ||
@@ -91,7 +102,9 @@ async function open(browser, uid, uname) {
 
   const token = jwt(config(uid, uname));
   const url = `${FIXTURES}/editor.html?key=${encodeURIComponent(KEY)}` +
-              `&uid=${uid}&uname=${uname}&token=${encodeURIComponent(token)}`;
+              `&uid=${uid}&uname=${uname}&token=${encodeURIComponent(token)}` +
+              `&docserver=${encodeURIComponent(DOCSERVER)}` +
+              `&fixtures=${encodeURIComponent(FIXTURES)}`;
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   return { page, sockets, uname };
 }

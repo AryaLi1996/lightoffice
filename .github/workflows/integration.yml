@@ -108,12 +108,12 @@ jobs:
           cp tests/fixtures/collab.docx tests/fixtures/editor.html /tmp/served/
           nohup node tests/fixture_server.js --port 8099 --dir /tmp/served > /tmp/fixture.log 2>&1 &
           for _ in $(seq 1 20); do
-            curl -sf -o /dev/null http://10.0.7.1:8099/collab.docx && break
+            curl -sf -o /dev/null http://172.28.7.1:8099/collab.docx && break
             sleep 1
           done
           docker exec lightoffice-documentserver \
             curl -sS -o /dev/null -w 'document server can fetch fixture -> %{http_code}\n' \
-            http://10.0.7.1:8099/collab.docx
+            http://172.28.7.1:8099/collab.docx
 
       - name: Verify AC 3.3 / 3.4 — two editors co-edit one document
         env:
@@ -122,7 +122,12 @@ jobs:
           # Use whichever chromium Playwright installed for this runner.
           CHROME_PATH="$(node -e "console.log(require('playwright').chromium.executablePath())")"
           export CHROME_PATH
-          node tests/coedit_browser.js --json baseline/coedit.json
+          # --fixtures uses the bridge gateway (the container fetches from it);
+          # --docserver uses the published port (the browser loads from it).
+          node tests/coedit_browser.js \
+            --fixtures http://172.28.7.1:8099 \
+            --docserver http://localhost:8081 \
+            --json baseline/coedit.json
 
       - name: Acceptance summary
         if: always()

@@ -12,7 +12,7 @@
     "cryptoSupport": "true",
     "order": 0,
     "defaultUrl": "http://10.0.7.10:8080",
-    "documentServerUrl": "http://10.0.7.20",
+    "documentServerUrl": "http://10.0.7.10:8081",
     "icons": {
         "themeLight": {
             "connectionsList": "./assets/listicon.svg",

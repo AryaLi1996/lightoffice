@@ -1,8 +1,22 @@
 # LightOffice intranet collaboration stack.
 #
-# Everything binds onto a dedicated 10.0.7.0/24 bridge so the desktop client is
-# configured against a real RFC1918 intranet address rather than a public host.
-# Nextcloud is additionally published on the host at :8080 for smoke tests.
+# Two address spaces, and keeping them apart matters:
+#
+#   LIGHTOFFICE_PUBLIC_HOST  the address CLIENTS use. In production this is the
+#                            host's own address on the corporate network — the
+#                            EC2 private IP from deploy/aws/lightoffice-stack.yaml
+#                            (10.0.7.10 by default). It is compiled into the
+#                            desktop client, so it must be decided before the
+#                            client is built.
+#   172.28.7.0/24            the bridge the containers talk to EACH OTHER on.
+#                            Purely internal, never reachable by a client, and
+#                            deliberately NOT in 10.0.7.0/24: on the AWS host
+#                            that range belongs to the VPC subnet, and a docker
+#                            bridge overlapping it would blackhole the host's
+#                            own traffic.
+#
+# Clients reach Nextcloud on :8080 and Document Server on :8081 of the public
+# host; the containers reach each other over the bridge.
 
 services:
   db:
@@ -19,7 +33,7 @@ services:
       MYSQL_USER: nextcloud
     networks:
       intranet:
-        ipv4_address: 10.0.7.30
+        ipv4_address: 172.28.7.30
     healthcheck:
       test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
@@ -38,7 +52,11 @@ services:
     volumes:
       - nextcloud_data:/var/www/html
     environment:
-      MYSQL_HOST: 10.0.7.30
+      # Service name, not the bridge IP: docker's embedded DNS resolves it, so
+      # the stack survives a change of bridge subnet. Nextcloud persists this
+      # value into config.php at install time, so a hardcoded IP here becomes a
+      # permanent, silent dependency on that exact subnet.
+      MYSQL_HOST: db
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
       MYSQL_PASSWORD: ${DB_PASSWORD:-lightoffice}
@@ -46,12 +64,19 @@ services:
       NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-lightoffice_admin}
       # Both the intranet address and the host-published address must be trusted,
       # otherwise Nextcloud answers requests with "untrusted domain".
-      NEXTCLOUD_TRUSTED_DOMAINS: "10.0.7.10 localhost 127.0.0.1 10.0.7.10:8080 localhost:8080"
-      OVERWRITEHOST: "10.0.7.10:8080"
+      # Nextcloud refuses requests whose Host header is not trusted, so the
+      # client-facing address has to be listed here as well as compiled into
+      # the client. Override LIGHTOFFICE_PUBLIC_HOST in deploy/.env to point a
+      # deployment somewhere else.
+      NEXTCLOUD_TRUSTED_DOMAINS: >-
+        ${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}
+        ${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}:8080
+        localhost localhost:8080 127.0.0.1
+      OVERWRITEHOST: "${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}:8080"
       OVERWRITEPROTOCOL: "http"
     networks:
       intranet:
-        ipv4_address: 10.0.7.10
+        ipv4_address: 172.28.7.10
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost/status.php"]
       interval: 10s
@@ -73,7 +98,7 @@ services:
       - ds_logs:/var/log/onlyoffice
     networks:
       intranet:
-        ipv4_address: 10.0.7.20
+        ipv4_address: 172.28.7.20
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost/healthcheck"]
       interval: 15s
@@ -92,5 +117,5 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.0.7.0/24
-          gateway: 10.0.7.1
+        - subnet: 172.28.7.0/24
+          gateway: 172.28.7.1
