@@ -58,8 +58,16 @@ while IFS= read -r f; do
 done < <(find overlay -name '*.svg' | sort)
 
 hdr "docker compose"
+# The compose file declares its secrets as ${VAR:?...}, so interpolation fails
+# without deploy/.env — which is gitignored and absent on a fresh checkout.
+# Structural validation does not need real values, so supply throwaway ones
+# rather than making the lint depend on a generated file.
+compose_env() {
+  env DB_ROOT_PASSWORD=lint DB_PASSWORD=lint \
+      NEXTCLOUD_ADMIN_PASSWORD=lint DOCSERVER_JWT_SECRET=lint "$@"
+}
 if docker compose version >/dev/null 2>&1; then
-  if out=$(docker compose -f deploy/docker-compose.nextcloud.yml config 2>&1 >/dev/null); then
+  if out=$(compose_env docker compose -f deploy/docker-compose.nextcloud.yml config 2>&1 >/dev/null); then
     ok "compose config"
   else
     bad "compose config"; printf '%s\n' "$out" | sed 's/^/      /' | head -10

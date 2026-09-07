@@ -272,7 +272,10 @@ if [ -n "$nc_status" ] && grep -q "Up" <<<"$nc_status"; then
   ver=$(curl -s --cacert "$CA" https://localhost/status.php 2>/dev/null | jq -r '.versionstring // "?"')
   proxy=$(docker ps --filter "name=lightoffice-proxy" --format "{{.Status}}" 2>/dev/null | head -1)
   ds=$(docker ps --filter "name=lightoffice-documentserver" --format "{{.Status}}" 2>/dev/null | head -1)
-  if [ "$code" = "200" ]; then
+  if [ ! -f "$CA" ]; then
+    record 3.1 BLOCKED "容器在运行，但缺少 TLS 证书，无法校验" \
+      "未找到 $CA —— 先运行 scripts/gen_tls_cert.sh。（栈仅提供 TLS，没有证书就没有可校验的端点。）"
+  elif [ "$code" = "200" ]; then
     record 3.1 PASS "Nextcloud 容器运行中且 status.php 经 TLS 返回 200" \
       "nextcloud=$nc_status (v$ver); documentserver=$ds; proxy=$proxy（TLS 终结，后端不发布明文端口）"
   else

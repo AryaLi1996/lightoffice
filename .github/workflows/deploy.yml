@@ -56,6 +56,14 @@ jobs:
       - run: npm ci --omit=optional
 
       - name: Compose file is schema-valid
+        # Throwaway values: the file declares its secrets as ${VAR:?...} and
+        # deploy/.env is gitignored, but validating structure needs no real
+        # credentials. A rollout gets its values from the environment below.
+        env:
+          DB_ROOT_PASSWORD: validate-only
+          DB_PASSWORD: validate-only
+          NEXTCLOUD_ADMIN_PASSWORD: validate-only
+          DOCSERVER_JWT_SECRET: validate-only
         run: docker compose -f deploy/docker-compose.nextcloud.yml config >/dev/null
 
       - name: Addresses agree, and no credential is a hardcoded literal
