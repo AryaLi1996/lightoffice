@@ -38,11 +38,29 @@ function arg(name, fallback) {
   return i !== -1 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
-const SECRET = process.env.JWT_SECRET || arg('--secret', 'lightoffice_jwt_secret');
+/**
+ * The Document Server JWT secret. Since the compose file stopped shipping a
+ * working default, the only correct source is the deployment's own .env — a
+ * hardcoded fallback here would just reintroduce the guessable secret through
+ * the back door, and the failure it produces ("security token is not correctly
+ * formed") gives no hint that the secret is the problem.
+ */
+function jwtSecret() {
+  const explicit = process.env.JWT_SECRET || arg('--secret', '');
+  if (explicit) return explicit;
+  const envFile = path.join(__dirname, '..', 'deploy', '.env');
+  if (fs.existsSync(envFile)) {
+    const m = /^DOCSERVER_JWT_SECRET=(.*)$/m.exec(fs.readFileSync(envFile, 'utf8'));
+    if (m && m[1].trim()) return m[1].trim();
+  }
+  console.error('no JWT secret: set JWT_SECRET, pass --secret, or run scripts/gen_env.sh');
+  process.exit(2);
+}
+const SECRET = jwtSecret();
 const FIXTURES = arg('--fixtures', 'http://172.28.7.1:8099');
 // Address the BROWSER loads the editor from: the Document Server's published
 // host port. A container bridge IP would not resolve outside the docker host.
-const DOCSERVER = arg('--docserver', process.env.LIGHTOFFICE_DOCSERVER || 'http://localhost:8081');
+const DOCSERVER = arg('--docserver', process.env.LIGHTOFFICE_DOCSERVER || 'https://localhost:8443');
 const KEY = arg('--key', 'lo-coedit-' + Date.now());
 const JSON_OUT = arg('--json', 'baseline/coedit.json');
 const CHROME = arg('--chrome', process.env.CHROME_PATH ||
@@ -87,7 +105,11 @@ const check = (label, ok, detail) => {
 };
 
 async function open(browser, uid, uname) {
-  const page = await (await browser.newContext()).newPage();
+  // The lab certificate is self-signed, so Chromium would reject it. This test
+  // is about whether co-editing survives TLS termination, not about chain
+  // validation — which a self-signed certificate could not demonstrate anyway.
+  // A production check should instead trust the corporate CA and drop this.
+  const page = await (await browser.newContext({ ignoreHTTPSErrors: true })).newPage();
   const sockets = [];
   page.on('websocket', (s) => {
     const rec = { url: s.url(), sent: 0, received: 0, sentTypes: new Set(), recvTypes: new Set() };

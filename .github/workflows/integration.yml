@@ -33,11 +33,6 @@ jobs:
     timeout-minutes: 45
 
     env:
-      DB_ROOT_PASSWORD: ci-root-${{ github.run_id }}
-      DB_PASSWORD: ci-db-${{ github.run_id }}
-      NEXTCLOUD_ADMIN_USER: ciadmin
-      NEXTCLOUD_ADMIN_PASSWORD: ci-admin-${{ github.run_id }}
-      DOCSERVER_JWT_SECRET: ci-jwt-${{ github.run_id }}
       ALICE_PASS: AlicePass!2345
       BOB_PASS: BobPass!2345
 
@@ -61,6 +56,13 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      - name: Generate credentials and a TLS certificate
+        # The compose file declares its secrets as ${VAR:?...} and the proxy
+        # will not start without a certificate, so both are prerequisites now.
+        run: |
+          scripts/gen_env.sh
+          scripts/gen_tls_cert.sh --host 10.0.7.10
+
       - name: Start the stack
         run: docker compose -f deploy/docker-compose.nextcloud.yml up -d
 
@@ -82,13 +84,23 @@ jobs:
           wait_healthy lightoffice-db 60
           wait_healthy lightoffice-nextcloud 120
           wait_healthy lightoffice-documentserver 180
+          wait_healthy lightoffice-proxy 60
 
-      - name: Verify AC 3.1 — status.php answers 200
+      - name: Verify AC 3.1 — status.php answers 200 over TLS
         run: |
-          code=$(curl -sS -o /dev/null -w '%{http_code}' -I http://localhost:8080/status.php)
+          CA=deploy/tls/fullchain.pem
+          code=$(curl -sS --cacert "$CA" -o /dev/null -w '%{http_code}' -I https://localhost/status.php)
           echo "status.php -> HTTP $code"
-          curl -sS http://localhost:8080/status.php | jq .
+          curl -sS --cacert "$CA" https://localhost/status.php | jq .
           [ "$code" = "200" ]
+
+      - name: The plaintext ports must not be reachable
+        run: |
+          for p in 8080 8081; do
+            code=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://localhost:$p/" || true)
+            echo "http://localhost:$p -> ${code:-refused}"
+            [ "${code:-000}" = "000" ] || { echo "::error::port $p still serves plaintext"; exit 1; }
+          done
 
       - name: Provision test users and enable transactional locking
         run: |
@@ -116,8 +128,6 @@ jobs:
             http://172.28.7.1:8099/collab.docx
 
       - name: Verify AC 3.3 / 3.4 — two editors co-edit one document
-        env:
-          JWT_SECRET: ${{ env.DOCSERVER_JWT_SECRET }}
         run: |
           # Use whichever chromium Playwright installed for this runner.
           CHROME_PATH="$(node -e "console.log(require('playwright').chromium.executablePath())")"
@@ -126,7 +136,7 @@ jobs:
           # --docserver uses the published port (the browser loads from it).
           node tests/coedit_browser.js \
             --fixtures http://172.28.7.1:8099 \
-            --docserver http://localhost:8081 \
+            --docserver https://localhost:8443 \
             --json baseline/coedit.json
 
       - name: Acceptance summary

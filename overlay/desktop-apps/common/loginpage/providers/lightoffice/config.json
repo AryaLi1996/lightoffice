@@ -11,8 +11,8 @@
     "startPage": "/",
     "cryptoSupport": "true",
     "order": 0,
-    "defaultUrl": "http://10.0.7.10:8080",
-    "documentServerUrl": "http://10.0.7.10:8081",
+    "defaultUrl": "https://10.0.7.10",
+    "documentServerUrl": "https://10.0.7.10:8443",
     "icons": {
         "themeLight": {
             "connectionsList": "./assets/listicon.svg",

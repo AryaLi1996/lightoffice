@@ -237,15 +237,17 @@ Resources:
       GroupDescription: LightOffice editors, reachable from the corporate network only
       VpcId: !Ref Vpc
       SecurityGroupIngress:
-        - Description: Nextcloud (document storage and the client's portal)
+        # TLS only. The backends publish no host ports; the nginx proxy in the
+        # compose file terminates TLS and is the sole ingress.
+        - Description: Portal and WebDAV over TLS
           IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
+          FromPort: 443
+          ToPort: 443
           CidrIp: !Ref CorporateCidr
-        - Description: ONLYOFFICE Document Server (co-editing, incl. the WebSocket)
+        - Description: Document Server over TLS (editor assets + co-authoring WebSocket)
           IpProtocol: tcp
-          FromPort: 8081
-          ToPort: 8081
+          FromPort: 8443
+          ToPort: 8443
           CidrIp: !Ref CorporateCidr
       SecurityGroupEgress:
         - Description: Container image pulls and OS updates via NAT
@@ -405,6 +407,12 @@ Resources:
           LIGHTOFFICE_PUBLIC_HOST=${HostPrivateIp}
           EOF
 
+          # The proxy will not start without a certificate. This generates a
+          # self-signed one so a fresh stack comes up; replace
+          # deploy/tls/{fullchain,privkey}.pem with a corporate-CA certificate
+          # for the same address before letting real users on.
+          scripts/gen_tls_cert.sh --host ${HostPrivateIp} --dns ${HostName}.${PrivateDnsZone}
+
           docker compose -f deploy/docker-compose.nextcloud.yml pull
           docker compose -f deploy/docker-compose.nextcloud.yml up -d
 
@@ -461,17 +469,17 @@ Outputs:
       Address the LightOffice desktop client connects to. This must match
       defaultPortal in overlay/desktop-apps/common/loginpage/src/lightoffice-cloud.js
       at the time the client is built.
-    Value: !Sub "http://${HostPrivateIp}:8080"
+    Value: !Sub "https://${HostPrivateIp}"
     Export: {Name: !Sub "${AWS::StackName}-PortalUrl"}
 
   DocumentServerUrl:
     Description: Address clients load the editor from, and where co-editing WebSockets terminate.
-    Value: !Sub "http://${HostPrivateIp}:8081"
+    Value: !Sub "https://${HostPrivateIp}:8443"
     Export: {Name: !Sub "${AWS::StackName}-DocumentServerUrl"}
 
   PortalDnsUrl:
     Description: Stable name for the same host, for anything configurable after install.
-    Value: !Sub "http://${HostName}.${PrivateDnsZone}:8080"
+    Value: !Sub "https://${HostName}.${PrivateDnsZone}"
 
   HostPrivateAddress:
     Value: !Ref HostPrivateIp

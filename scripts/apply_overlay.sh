@@ -16,7 +16,12 @@ SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 OVERLAY="$ROOT/overlay"
 MARK="LIGHTOFFICE-OVERLAY"
 
+# Anchors that no longer match upstream. Counted rather than fatal on first hit,
+# so a rebase reports every patch that needs re-targeting in one run.
+DRIFTED=0
+
 info() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+drift() { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; DRIFTED=$((DRIFTED + 1)); }
 skip() { printf '  \033[33m·\033[0m %s (already applied)\n' "$*"; }
 die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
@@ -96,7 +101,7 @@ if [ -n "$CONNECT_HTML" ]; then
   if grep -q "$MARK" "$CONNECT_HTML"; then
     skip "connect page script injection"
   else
-    python3 - "$CONNECT_HTML" "$MARK" <<'PY'
+    if python3 - "$CONNECT_HTML" "$MARK" <<'PY'
 import sys, re
 path, mark = sys.argv[1], sys.argv[2]
 html = open(path, encoding='utf-8').read()
@@ -109,9 +114,13 @@ if m:
     open(path, 'w', encoding='utf-8').write(html)
     print('injected')
 else:
-    print('anchor-not-found')
+    print('anchor-not-found'); sys.exit(1)
 PY
-    info "cloud defaults injected into $(basename "$CONNECT_HTML")"
+    then
+      info "cloud defaults injected into $(basename "$CONNECT_HTML")"
+    else
+      drift "connect page anchor not found in $(basename "$CONNECT_HTML") — upstream moved dialogconnect.js"
+    fi
   fi
 fi
 
@@ -121,12 +130,13 @@ fi
 # For an on-premises build we force it off at source so the trim always holds.
 trim_collab() {
   local f="$1"
+  local ed="${2:-$f}"
   [ -f "$f" ] || return 0
   if grep -q "$MARK-collab" "$f"; then
     skip "collaboration tab in $(basename "$(dirname "$(dirname "$f")")")"
     return 0
   fi
-  python3 - "$f" "$MARK" <<'PY'
+  if python3 - "$f" "$MARK" <<'PY'
 import re, sys
 path, mark = sys.argv[1], sys.argv[2]
 src = open(path, encoding='utf-8').read()
@@ -134,7 +144,7 @@ src = open(path, encoding='utf-8').read()
 pat = re.compile(r"(\n(\s*)me\.toolbar\.setVisible\('review',\s*)(.*?)(\);)", re.S)
 m = pat.search(src)
 if not m:
-    print('anchor-not-found'); sys.exit(0)
+    print('anchor-not-found'); sys.exit(1)
 indent = m.group(2)
 original = ' '.join(m.group(3).split())
 replacement = (
@@ -149,11 +159,15 @@ src = src[:m.start()] + replacement + m.group(4) + src[m.end():]
 open(path, 'w', encoding='utf-8').write(src)
 print('trimmed')
 PY
-  info "collaboration tab hidden in $(basename "$(dirname "$(dirname "$f")")")"
+  then
+    info "collaboration tab hidden in $ed"
+  else
+    drift "collaboration tab anchor not found in $ed — upstream changed setVisible('review', …)"
+  fi
 }
 
 for ed in documenteditor spreadsheeteditor presentationeditor pdfeditor; do
-  trim_collab "$SRC/web-apps/apps/$ed/main/app/controller/Toolbar.js"
+  trim_collab "$SRC/web-apps/apps/$ed/main/app/controller/Toolbar.js" "$ed"
 done
 
 # ------------------------------------------------------ 5. disable plugins ----
@@ -163,13 +177,13 @@ PLUGINS="$SRC/web-apps/apps/common/main/lib/controller/Plugins.js"
 if grep -q "$MARK-plugins" "$PLUGINS" 2>/dev/null; then
   skip "plugin loading"
 else
-  python3 - "$PLUGINS" "$MARK" <<'PY'
+  if python3 - "$PLUGINS" "$MARK" <<'PY'
 import sys
 path, mark = sys.argv[1], sys.argv[2]
 src = open(path, encoding='utf-8').read()
 needle = "if (!this.appOptions.customization || (this.appOptions.customization.plugins!==false)) {"
 if needle not in src:
-    print('anchor-not-found'); sys.exit(0)
+    print('anchor-not-found'); sys.exit(1)
 repl = (f"/* {mark}-plugins: LightOffice is a lightweight on-premises build and\n"
         f"           does not ship the plugin host (this also removes the AI\n"
         f"           assistant, which upstream delivers as a plugin). */\n"
@@ -178,8 +192,19 @@ src = src.replace(needle, repl, 1)
 open(path, 'w', encoding='utf-8').write(src)
 print('disabled')
 PY
-  info "plugin host disabled (removes AI assistant)"
+  then
+    info "plugin host disabled (removes AI assistant)"
+  else
+    drift "plugin host anchor not found — upstream changed the customization.plugins guard"
+  fi
 fi
 
 echo
+if [ "$DRIFTED" -ne 0 ]; then
+  echo "OVERLAY INCOMPLETE: $DRIFTED patch anchor(s) no longer match upstream." >&2
+  echo "Those customisations were NOT applied. Re-target them before shipping a" >&2
+  echo "build: skipping them silently would ship the collaboration tab and the" >&2
+  echo "plugin host still enabled." >&2
+  exit 1
+fi
 echo "Overlay applied. Review with:  git -C \"$SRC\" diff --stat"

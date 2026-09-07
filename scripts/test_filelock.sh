@@ -9,12 +9,17 @@
 # which is the behaviour a second editor actually hits when saving a file
 # someone else is writing. This drives that path directly.
 #
-# Usage: scripts/test_filelock.sh [--portal http://localhost:8080] [--user alice] [--pass ...]
+# Runs over TLS: WebDAV sends Basic-auth credentials, so a plaintext run of this
+# test would put a real password on the wire.
+#
+# Usage: scripts/test_filelock.sh [--portal https://localhost] [--cacert PATH]
+#                                 [--user alice] [--pass ...]
 
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORTAL="http://localhost:8080"
+PORTAL="https://localhost"
+CACERT="$ROOT/deploy/tls/fullchain.pem"
 USER_="alice"
 PASS="AlicePass!2345"
 WRITERS=4
@@ -23,6 +28,7 @@ SIZE_MB=110
 while [ $# -gt 0 ]; do
   case "$1" in
     --portal) PORTAL="$2"; shift 2 ;;
+    --cacert) CACERT="$2"; shift 2 ;;
     --user) USER_="$2"; shift 2 ;;
     --pass) PASS="$2"; shift 2 ;;
     --writers) WRITERS="$2"; shift 2 ;;
@@ -44,7 +50,8 @@ echo "driving $WRITERS concurrent writers at $URL (${SIZE_MB}MB each)"
 : > "$OUT"
 for i in $(seq 1 "$WRITERS"); do
   (
-    code=$(curl -s -o /dev/null -w '%{http_code}' -u "$USER_:$PASS" -T "$payload" "$URL")
+    code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CACERT" \
+             -u "$USER_:$PASS" -T "$payload" "$URL")
     echo "writer$i $code" >> "$OUT"
   ) &
 done

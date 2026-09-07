@@ -73,20 +73,48 @@ test('the container bridge does not overlap the host subnet', () => {
 });
 
 // ------------------------------------------------------- client addressing --
-test('client portal and document server point at the same published host', () => {
-  const c = compose();
-  const host = publicHost();
-  const portalPort = String(c.services.nextcloud.ports[0]).split(':')[0];
-  const dsPort = String(c.services.documentserver.ports[0]).split(':')[0];
+/** Host ports the TLS proxy publishes: [portal, documentServer]. */
+function proxyPorts() {
+  const ports = compose().services.proxy.ports.map((p) => Number(String(p).split(':')[0]));
+  return { portal: ports[0], docserver: ports[1] };
+}
 
-  assert.strictEqual(readJSON(PROVIDER).defaultUrl, `http://${host}:${portalPort}`);
-  assert.strictEqual(readJSON(PROVIDER).documentServerUrl, `http://${host}:${dsPort}`);
+const url = (host, port) => (port === 443 ? `https://${host}` : `https://${host}:${port}`);
+
+test('client portal and document server point at the TLS proxy', () => {
+  const host = publicHost();
+  const { portal, docserver } = proxyPorts();
+
+  assert.strictEqual(readJSON(PROVIDER).defaultUrl, url(host, portal));
+  assert.strictEqual(readJSON(PROVIDER).documentServerUrl, url(host, docserver));
 
   const js = read(CLOUD_JS);
-  assert.ok(js.includes(`defaultPortal: 'http://${host}:${portalPort}'`),
-    `lightoffice-cloud.js defaultPortal does not match http://${host}:${portalPort}`);
-  assert.ok(js.includes(`documentServer: 'http://${host}:${dsPort}'`),
-    `lightoffice-cloud.js documentServer does not match http://${host}:${dsPort}`);
+  assert.ok(js.includes(`defaultPortal: '${url(host, portal)}'`),
+    `lightoffice-cloud.js defaultPortal does not match ${url(host, portal)}`);
+  assert.ok(js.includes(`documentServer: '${url(host, docserver)}'`),
+    `lightoffice-cloud.js documentServer does not match ${url(host, docserver)}`);
+});
+
+test('clients are never given a plaintext endpoint', () => {
+  // WebDAV carries Basic-auth credentials; http:// here would put them on the
+  // wire in the clear.
+  for (const v of [readJSON(PROVIDER).defaultUrl, readJSON(PROVIDER).documentServerUrl]) {
+    assert.match(v, /^https:\/\//, `${v} is not https`);
+  }
+  const js = read(CLOUD_JS);
+  const plaintext = [...js.matchAll(/(defaultPortal|documentServer):\s*'(http:\/\/[^']+)'/g)];
+  assert.deepStrictEqual(plaintext.map((m) => m[2]), [],
+    'client defaults contain a plaintext endpoint');
+});
+
+test('no backend publishes a host port of its own', () => {
+  // Only the proxy is reachable from outside; a stray ports: entry on a
+  // backend would quietly reopen the plaintext path around TLS.
+  const c = compose();
+  for (const [name, svc] of Object.entries(c.services)) {
+    if (name === 'proxy') continue;
+    assert.ok(!svc.ports, `${name} publishes host ports, bypassing the TLS proxy`);
+  }
 });
 
 test('clients are never pointed at a container bridge address', () => {
@@ -124,8 +152,8 @@ test('CloudFormation pins the host to the address clients compile in', { skip: !
 
 test('CloudFormation opens exactly the ports the client needs', () => {
   const c = compose();
-  const wanted = [c.services.nextcloud, c.services.documentserver]
-    .map((s) => Number(String(s.ports[0]).split(':')[0]))
+  const wanted = c.services.proxy.ports
+    .map((p) => Number(String(p).split(':')[0]))
     .sort((a, b) => a - b);
   const opened = loadCfn().Resources.HostSecurityGroup.Properties.SecurityGroupIngress
     .map((r) => r.FromPort).sort((a, b) => a - b);
@@ -161,9 +189,7 @@ test('CloudFormation encrypts persistent storage and keeps it on replace', () =>
 
 // ------------------------------------------------------------------- misc ---
 test('the deployment guide documents the configured address', () => {
-  const c = compose();
-  const port = String(c.services.nextcloud.ports[0]).split(':')[0];
-  assert.ok(read('docs/DEPLOYMENT_GUIDE.md').includes(`${publicHost()}:${port}`),
+  assert.ok(read('docs/DEPLOYMENT_GUIDE.md').includes(publicHost()),
     'DEPLOYMENT_GUIDE.md does not mention the configured address');
 });
 
@@ -171,8 +197,9 @@ test('every service pins an explicit image tag', () => {
   for (const [name, svc] of Object.entries(compose().services)) {
     assert.ok(svc.image, `${name} has no image`);
     assert.ok(svc.image.includes(':'), `${name} image ${svc.image} is untagged`);
-    assert.ok(!svc.image.endsWith(':latest') || name === 'documentserver',
-      `${name} pins :latest, which makes deployments irreproducible`);
+    assert.ok(!svc.image.endsWith(':latest'),
+      `${name} pins :latest, which lets the image change under a deployment ` +
+      `whose clients were tested against a specific version`);
   }
 });
 
@@ -182,9 +209,17 @@ test('secrets come from the environment, never hardcoded literals', () => {
                      'NEXTCLOUD_ADMIN_PASSWORD', 'JWT_SECRET']) {
     const m = new RegExp(`${key}:\\s*(.+)`).exec(raw);
     assert.ok(m, `${key} not found in compose`);
-    assert.match(m[1].trim(), /^\$\{[A-Z_]+(:-[^}]*)?\}$/,
-      `${key} is a hardcoded literal (${m[1].trim()})`);
+    assert.match(m[1].trim(), /^\$\{[A-Z_]+:\?[^}]*\}$/,
+      `${key} must be \${VAR:?...} so compose fails closed rather than ` +
+      `starting with a credential published in this repository ` +
+      `(found: ${m[1].trim()})`);
   }
+});
+
+test('the generated env file cannot be committed', () => {
+  const ignore = read('.gitignore');
+  assert.match(ignore, /^\/?deploy\/\.env$/m,
+    'deploy/.env holds live credentials and must be gitignored');
 });
 
 test('overlay ships every file apply_overlay.sh installs', () => {

@@ -266,12 +266,15 @@ section "Ticket 3 — 内网协作与私有存储集成"
 
 nc_status=$(docker ps --filter "name=lightoffice-nextcloud" --format "{{.Status}}" 2>/dev/null | head -1)
 if [ -n "$nc_status" ] && grep -q "Up" <<<"$nc_status"; then
-  code=$(curl -s -o /dev/null -w '%{http_code}' -I http://localhost:8080/status.php 2>/dev/null)
-  ver=$(curl -s http://localhost:8080/status.php 2>/dev/null | jq -r '.versionstring // "?"')
+  # The stack is TLS-only now; the backends publish no plaintext port at all.
+  CA="$ROOT/deploy/tls/fullchain.pem"
+  code=$(curl -s -o /dev/null -w '%{http_code}' --cacert "$CA" -I https://localhost/status.php 2>/dev/null)
+  ver=$(curl -s --cacert "$CA" https://localhost/status.php 2>/dev/null | jq -r '.versionstring // "?"')
+  proxy=$(docker ps --filter "name=lightoffice-proxy" --format "{{.Status}}" 2>/dev/null | head -1)
   ds=$(docker ps --filter "name=lightoffice-documentserver" --format "{{.Status}}" 2>/dev/null | head -1)
   if [ "$code" = "200" ]; then
-    record 3.1 PASS "Nextcloud 容器运行中且 status.php 返回 200" \
-      "nextcloud=$nc_status (v$ver); documentserver=$ds"
+    record 3.1 PASS "Nextcloud 容器运行中且 status.php 经 TLS 返回 200" \
+      "nextcloud=$nc_status (v$ver); documentserver=$ds; proxy=$proxy（TLS 终结，后端不发布明文端口）"
   else
     record 3.1 FAIL "容器在运行但 status.php 未返回 200" "HTTP $code"
   fi
@@ -280,13 +283,13 @@ else
     "启动: docker compose -f deploy/docker-compose.nextcloud.yml up -d"
 fi
 
-cfgs=$(grep -rlE 'http://(10\.0\.|192\.168\.)' \
+cfgs=$(grep -rlE 'https://(10\.0\.|192\.168\.)' \
         "$ROOT/overlay/desktop-apps/common/loginpage" \
         "$DESK/common/loginpage/providers" 2>/dev/null | wc -l)
-url=$(grep -rhoE 'http://(10\.0\.|192\.168\.)[0-9.]+(:[0-9]+)?' \
+url=$(grep -rhoE 'https://(10\.0\.|192\.168\.)[0-9.]+(:[0-9]+)?' \
         "$ROOT/overlay/desktop-apps/common/loginpage" 2>/dev/null | sort -u | head -3 | tr '\n' ' ')
 if [ "$cfgs" -ge 2 ]; then
-  record 3.2 PASS "云端默认地址匹配内网 IP 正则 (10.0.* / 192.168.*)" \
+  record 3.2 PASS "云端默认地址匹配内网 IP 正则且为 TLS (https://10.0.* / 192.168.*)" \
     "$cfgs 个配置文件命中；地址: $url（与 deploy/docker-compose 中 nextcloud 的静态 IP 一致）"
 else
   record 3.2 FAIL "未找到内网默认地址" "命中文件数=$cfgs"

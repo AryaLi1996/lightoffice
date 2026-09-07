@@ -2,6 +2,10 @@
 #
 # Two address spaces, and keeping them apart matters:
 #
+# Credentials are ${VAR:?...} rather than ${VAR:-default}: a default that works
+# is a default that ships. Compose refuses to start until deploy/.env exists —
+# scripts/gen_env.sh generates one with random secrets.
+#
 #   LIGHTOFFICE_PUBLIC_HOST  the address CLIENTS use. In production this is the
 #                            host's own address on the corporate network — the
 #                            EC2 private IP from deploy/aws/lightoffice-stack.yaml
@@ -15,8 +19,10 @@
 #                            bridge overlapping it would blackhole the host's
 #                            own traffic.
 #
-# Clients reach Nextcloud on :8080 and Document Server on :8081 of the public
-# host; the containers reach each other over the bridge.
+# Clients reach the stack over TLS only: :443 for the portal and :8443 for the
+# Document Server, both terminated by the nginx proxy. The backends publish no
+# host ports at all — previously everything, including WebDAV Basic-auth
+# credentials and document contents, crossed the network as plain HTTP.
 
 services:
   db:
@@ -27,8 +33,8 @@ services:
     volumes:
       - db_data:/var/lib/mysql
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-lightoffice_root}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-lightoffice}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD is required - run scripts/gen_env.sh}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required - run scripts/gen_env.sh}
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
     networks:
@@ -44,8 +50,6 @@ services:
     image: nextcloud:29-apache
     container_name: lightoffice-nextcloud
     restart: unless-stopped
-    ports:
-      - "8080:80"
     depends_on:
       db:
         condition: service_healthy
@@ -59,9 +63,9 @@ services:
       MYSQL_HOST: db
       MYSQL_DATABASE: nextcloud
       MYSQL_USER: nextcloud
-      MYSQL_PASSWORD: ${DB_PASSWORD:-lightoffice}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required - run scripts/gen_env.sh}
       NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
-      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-lightoffice_admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:?NEXTCLOUD_ADMIN_PASSWORD is required - run scripts/gen_env.sh}
       # Both the intranet address and the host-published address must be trusted,
       # otherwise Nextcloud answers requests with "untrusted domain".
       # Nextcloud refuses requests whose Host header is not trusted, so the
@@ -70,10 +74,12 @@ services:
       # deployment somewhere else.
       NEXTCLOUD_TRUSTED_DOMAINS: >-
         ${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}
-        ${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}:8080
-        localhost localhost:8080 127.0.0.1
-      OVERWRITEHOST: "${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}:8080"
-      OVERWRITEPROTOCOL: "http"
+        localhost 127.0.0.1
+      OVERWRITEHOST: "${LIGHTOFFICE_PUBLIC_HOST:-10.0.7.10}"
+      OVERWRITEPROTOCOL: "https"
+      # Without this Nextcloud ignores X-Forwarded-Proto and keeps emitting
+      # http:// URLs, which browsers then block as mixed content.
+      TRUSTED_PROXIES: "172.28.7.0/24"
     networks:
       intranet:
         ipv4_address: 172.28.7.10
@@ -84,14 +90,24 @@ services:
       retries: 30
 
   documentserver:
-    image: onlyoffice/documentserver:latest
+    # Pinned: :latest silently changes the co-editing engine under a deployment
+    # whose clients were built and tested against a specific version.
+    image: onlyoffice/documentserver:9.4.0
     container_name: lightoffice-documentserver
     restart: unless-stopped
-    ports:
-      - "8081:80"
     environment:
+      # Document Server refuses to fetch documents from RFC1918 addresses
+      # unless this is set (default.json ships allowPrivateIPAddress: false).
+      # An intranet deployment has no alternative: Nextcloud only ever has a
+      # private address. Without it every document fails to open with the
+      # unhelpful "Download failed" and nothing in the editor names the cause.
+      #
+      # The corresponding risk — SSRF to internal services — is contained by
+      # the JWT below, which means only a party holding the secret can ask the
+      # server to fetch a URL at all.
+      ALLOW_PRIVATE_IP_ADDRESS: "true"
       JWT_ENABLED: "true"
-      JWT_SECRET: ${DOCSERVER_JWT_SECRET:-lightoffice_jwt_secret}
+      JWT_SECRET: ${DOCSERVER_JWT_SECRET:?DOCSERVER_JWT_SECRET is required - run scripts/gen_env.sh}
       JWT_HEADER: "Authorization"
     volumes:
       - ds_data:/var/www/onlyoffice/Data
@@ -104,6 +120,30 @@ services:
       interval: 15s
       timeout: 5s
       retries: 40
+
+  proxy:
+    image: nginx:1.27-alpine
+    container_name: lightoffice-proxy
+    restart: unless-stopped
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+      documentserver:
+        condition: service_healthy
+    ports:
+      - "443:443"     # portal / WebDAV
+      - "8443:8443"   # document server (editor assets + co-authoring socket)
+    volumes:
+      - ./nginx/lightoffice.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./tls:/etc/nginx/tls:ro
+    networks:
+      intranet:
+        ipv4_address: 172.28.7.40
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://localhost/status.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
 
 volumes:
   db_data:
