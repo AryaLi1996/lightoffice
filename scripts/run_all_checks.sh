@@ -67,10 +67,22 @@ run() {
   local log
   log="$LOGDIR/$(echo "$name" | tr ' /' '__').log"
   local start; start=$(date +%s)
-  if "$@" >"$log" 2>&1; then
+  # Capture the status directly rather than after an `if`: a false `if` with no
+  # `else` branch has exit status 0, so reading $? there reported every failure
+  # as "exit 0" and made the exit-2 case below unreachable.
+  "$@" >"$log" 2>&1
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
     emit "$name" PASS "$(($(date +%s) - start))s" "$log"
+    return
+  fi
+  # Convention: exit 2 means the check could not run, not that it failed. A
+  # check that never reached the server has nothing to say about the thing it
+  # was meant to test, and calling that a failure sends the reader after the
+  # wrong problem.
+  if [ "$rc" -eq 2 ]; then
+    emit "$name" SKIP "prerequisites missing — see $log" "$log"
   else
-    local rc=$?
     emit "$name" FAIL "exit $rc — see $log" "$log"
   fi
 }

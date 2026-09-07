@@ -1,6 +1,6 @@
 {
   "schema": "lightoffice/toolbar@1",
-  "measured": "2026-09-07T16:25:53Z",
+  "measured": "2026-09-07T16:33:01Z",
   "threshold_pct": 20,
   "removed_groups": {"collaboration_tab": 22, "plugins_tab": 4},
   "method": "new Common.UI.Button declarations in the views that build the ribbon; declarations are an upper bound on visible buttons, but both sides of the ratio are counted identically",

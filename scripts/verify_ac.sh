@@ -350,10 +350,24 @@ fi
 
 LK="$ROOT/baseline/filelock.result"
 if [ -f "$LK" ]; then
-  n423=$(grep -c '423' "$LK"); n201=$(grep -c '201' "$LK")
-  if [ "$n423" -ge 1 ] && [ "$n201" -ge 1 ]; then
+  n423=$(grep -c ' 423' "$LK"); n201=$(grep -cE ' (200|201|204)' "$LK")
+  n000=$(grep -c ' 000' "$LK")
+  # A round in which every writer is rejected is still correct locking — nobody
+  # interleaved a write. What separates it from a wedged file is whether a lone
+  # sequential writer then succeeds, which test_filelock.sh records.
+  solo=$(awk '/^sequential write:/ {print $3}' "$LK")
+  if [ "${n000:-0}" -ge 1 ] && [ "$n423" -eq 0 ] && [ "$n201" -eq 0 ]; then
+    record 3.5 BLOCKED "并发写入未到达服务端（全部 000）" \
+      "地址或证书不匹配，抑或端口未发布——这不是锁失效。重跑 scripts/test_filelock.sh 并核对 --portal/--cacert"
+  elif [ "$n423" -ge 1 ] && [ "$n201" -ge 1 ]; then
     record 3.5 PASS "并发写入同名文件时返回 HTTP 423 Locked" \
-      "$n201 个写入成功(201)，$n423 个被锁拒绝(423)；Nextcloud 事务性文件锁 (DBLockingProvider)"
+      "$n201 个写入成功，$n423 个被锁拒绝(423)；Nextcloud 事务性文件锁 (DBLockingProvider)"
+  elif [ "$n423" -ge 1 ] && [ -n "$solo" ] && grep -qE '^(200|201|204)$' <<<"$solo"; then
+    record 3.5 PASS "并发写入全部被 423 拒绝，随后单独写入成功（$solo）" \
+      "全部竞争者被拒同样证明写入被串行化；单独写入成功说明锁会释放，文件未被卡死。DBLockingProvider 在共享锁升级失败时可拒绝全部竞争者。"
+  elif [ "$n423" -ge 1 ]; then
+    record 3.5 FAIL "并发写入全部被拒后，单独写入仍未成功（$solo）" \
+      "锁未释放；$(tr '\n' ' ' < "$LK")"
   else
     record 3.5 FAIL "未观察到 423" "$(tr '\n' ' ' < "$LK")"
   fi
