@@ -1,0 +1,96 @@
+# LightOffice intranet collaboration stack.
+#
+# Everything binds onto a dedicated 10.0.7.0/24 bridge so the desktop client is
+# configured against a real RFC1918 intranet address rather than a public host.
+# Nextcloud is additionally published on the host at :8080 for smoke tests.
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: lightoffice-db
+    command: --transaction-isolation=READ-COMMITTED --log-bin=binlog --binlog-format=ROW
+    restart: unless-stopped
+    volumes:
+      - db_data:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-lightoffice_root}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-lightoffice}
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+    networks:
+      intranet:
+        ipv4_address: 10.0.7.30
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  nextcloud:
+    image: nextcloud:29-apache
+    container_name: lightoffice-nextcloud
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - nextcloud_data:/var/www/html
+    environment:
+      MYSQL_HOST: 10.0.7.30
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${DB_PASSWORD:-lightoffice}
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD:-lightoffice_admin}
+      # Both the intranet address and the host-published address must be trusted,
+      # otherwise Nextcloud answers requests with "untrusted domain".
+      NEXTCLOUD_TRUSTED_DOMAINS: "10.0.7.10 localhost 127.0.0.1 10.0.7.10:8080 localhost:8080"
+      OVERWRITEHOST: "10.0.7.10:8080"
+      OVERWRITEPROTOCOL: "http"
+    networks:
+      intranet:
+        ipv4_address: 10.0.7.10
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/status.php"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  documentserver:
+    image: onlyoffice/documentserver:latest
+    container_name: lightoffice-documentserver
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    environment:
+      JWT_ENABLED: "true"
+      JWT_SECRET: ${DOCSERVER_JWT_SECRET:-lightoffice_jwt_secret}
+      JWT_HEADER: "Authorization"
+    volumes:
+      - ds_data:/var/www/onlyoffice/Data
+      - ds_logs:/var/log/onlyoffice
+    networks:
+      intranet:
+        ipv4_address: 10.0.7.20
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost/healthcheck"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+
+volumes:
+  db_data:
+  nextcloud_data:
+  ds_data:
+  ds_logs:
+
+networks:
+  intranet:
+    name: lightoffice-intranet
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.0.7.0/24
+          gateway: 10.0.7.1

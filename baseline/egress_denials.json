@@ -1,0 +1,14 @@
+[
+  {
+    "ts": "2026-09-07T05:27:51.161Z",
+    "kind": "connect_rejected",
+    "detail": "gateway answered 403 to CONNECT (policy denial or upstream failure)",
+    "host": "production.cloudfront.docker.com:443"
+  },
+  {
+    "ts": "2026-09-07T05:27:51.354Z",
+    "kind": "connect_rejected",
+    "detail": "gateway answered 403 to CONNECT (policy denial or upstream failure)",
+    "host": "production.cloudfront.docker.com:443"
+  }
+]

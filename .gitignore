@@ -1,0 +1,13 @@
+# Upstream checkouts and build output live outside the repo; never commit them.
+/onlyoffice-src/
+/build_tools/
+/out/
+/logs/
+
+# Installer artifacts are produced per-host by scripts/package.sh.
+/artifacts/*
+!/artifacts/.gitkeep
+
+node_modules/
+__pycache__/
+*.pyc

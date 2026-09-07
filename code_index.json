@@ -1,0 +1,143 @@
+{
+  "schema": "lightoffice/code-index@1",
+  "generated_by": "scripts/gen_code_index.py",
+  "upstream_root": "/home/user/onlyoffice-src",
+  "upstream_revision": "6a0bea2d0d127c658f57c41c1de4a5ce49e84fb0",
+  "submodule_revisions": {
+    "core": "b18715ae811aaa5cd9dae2dd9a4b9412d38b8b7b",
+    "desktop-apps": "bc46371aa062a7718cd90268e94c3d2b10ce3c51",
+    "desktop-sdk": "6bd2051287a496ac1504214caca69a5729625696",
+    "sdkjs": "b2f0aa1d5ca8c82e827ff3af6577d8edf913a2e7",
+    "web-apps": "1c8ca9987876bada73c0bde21367da09c0e1ed83",
+    "dictionaries": "d3223bbb777883db66ac3cd249f71c6ebdc992c7"
+  },
+  "build_system": {
+    "primary": "qmake",
+    "note": "ONLYOFFICE builds with qmake (137 .pro files). Only desktop-sdk uses CMake (27 of the 32 CMakeLists.txt in the tree)."
+  },
+  "index": {
+    "theme_path": {
+      "path": "web-apps/apps/common/main/resources/themes",
+      "type": "directory",
+      "exists": true,
+      "description": "Editor colour themes. theme_lightwps.json is installed here and registered in themes.json."
+    },
+    "theme_file": {
+      "path": "web-apps/apps/common/main/resources/themes/theme_lightwps.json",
+      "type": "file",
+      "exists": true,
+      "description": "The LightOffice theme itself (90 colour keys, matching upstream's full-theme reference set)."
+    },
+    "theme_registry": {
+      "path": "web-apps/apps/common/main/resources/themes/themes.json",
+      "type": "file",
+      "exists": true,
+      "description": "Theme manifest the editors read to populate the appearance menu."
+    },
+    "theme_variables_less": {
+      "path": "web-apps/apps/common/main/resources/less/colors-table.less",
+      "type": "file",
+      "exists": true,
+      "description": "Defines the :root CSS custom properties the theme JSON overrides."
+    },
+    "theme_canvas_consumer": {
+      "path": "sdkjs/common/skin.js",
+      "type": "file",
+      "exists": true,
+      "description": "Canvas renderer; reads the canvas-* theme keys that never appear in LESS."
+    },
+    "menu_config_path": {
+      "path": "web-apps/apps/documenteditor/main/app/controller/Toolbar.js",
+      "type": "file",
+      "exists": true,
+      "description": "Builds the document editor toolbar and adds the collaboration tab. LightOffice forces that tab off here."
+    },
+    "menu_layout_manager": {
+      "path": "web-apps/apps/common/main/lib/controller/LayoutManager.js",
+      "type": "file",
+      "exists": true,
+      "description": "Upstream's supported element-visibility gate (customization.layout), licence-gated behind canBrandingExt."
+    },
+    "plugin_host": {
+      "path": "web-apps/apps/common/main/lib/controller/Plugins.js",
+      "type": "file",
+      "exists": true,
+      "description": "Plugin loader. Disabled by the overlay, which is what removes the AI assistant (upstream ships it as a plugin, not built-in UI)."
+    },
+    "cloud_provider_registry": {
+      "path": "desktop-apps/common/loginpage/providers",
+      "type": "directory",
+      "exists": true,
+      "description": "Per-provider config.json + icons for every cloud the desktop client can connect to. The lightoffice/ provider is added here."
+    },
+    "cloud_provider_addon_registry": {
+      "path": "desktop-apps/common/loginpage/addon/externalcloud.json",
+      "type": "file",
+      "exists": true,
+      "description": "Secondary registry of external cloud providers."
+    },
+    "cloud_connect_dialog": {
+      "path": "desktop-apps/common/loginpage/src/dialogconnect.js",
+      "type": "file",
+      "exists": true,
+      "description": "The connect-to-cloud dialog; reads the portal URL the user enters."
+    },
+    "branding_version_header": {
+      "path": "desktop-apps/win-linux/src/version.h",
+      "type": "file",
+      "exists": true,
+      "description": "Base VERSIONINFO / About strings."
+    },
+    "branding_vendor_hook": {
+      "path": "desktop-apps/win-linux/src/prop/version_p.h",
+      "type": "file",
+      "exists": true,
+      "description": "Vendor override hook included at the end of version.h. LightOffice branding is injected here, leaving upstream sources untouched."
+    },
+    "branding_window_icon": {
+      "path": "desktop-apps/win-linux/res/icons/desktopeditors.ico",
+      "type": "file",
+      "exists": true,
+      "description": "Windows/Linux window and taskbar icon."
+    },
+    "build_defaults_pri": {
+      "path": "desktop-apps/win-linux/defaults.pri",
+      "type": "file",
+      "exists": true,
+      "description": "qmake defaults for the desktop app; the size-optimisation profile is included from here."
+    },
+    "desktop_project_file": {
+      "path": "desktop-apps/win-linux/ASCDocumentEditor.pro",
+      "type": "file",
+      "exists": true,
+      "description": "Top-level qmake project for the desktop application."
+    },
+    "dictionaries_path": {
+      "path": "dictionaries",
+      "type": "directory",
+      "exists": true,
+      "description": "Hunspell dictionaries. Trimmed to the shipped locale set."
+    },
+    "menu_config_all_editors": {
+      "paths": [
+        {
+          "path": "web-apps/apps/documenteditor/main/app/controller/Toolbar.js",
+          "exists": true
+        },
+        {
+          "path": "web-apps/apps/spreadsheeteditor/main/app/controller/Toolbar.js",
+          "exists": true
+        },
+        {
+          "path": "web-apps/apps/presentationeditor/main/app/controller/Toolbar.js",
+          "exists": true
+        },
+        {
+          "path": "web-apps/apps/pdfeditor/main/app/controller/Toolbar.js",
+          "exists": true
+        }
+      ],
+      "description": "Every editor's toolbar controller — all four gain the collaboration trim."
+    }
+  }
+}
