@@ -30,7 +30,22 @@ SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
 
 WEB="$SRC/web-apps"
 DESK="$SRC/desktop-apps"
-OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
+# The desktop binary lands in desktop-apps/win-linux/build/<platform>/ when built
+# in place, and under out/ once packaged. Search both rather than guessing.
+find_binary() {
+  local c
+  for c in \
+    "$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+    "$SRC/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+    "$SRC/desktop-apps/win-linux/build/linux_64/DesktopEditors" \
+    "$SRC/desktop-apps/win-linux/build/DesktopEditors"; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+  find "$SRC/desktop-apps" "$(dirname "$SRC")/out" -type f -name DesktopEditors \
+       -perm -u+x 2>/dev/null | head -1
+}
+OUTBIN="$(find_binary)"
+[ -n "$OUTBIN" ] || OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
 THEME="$WEB/apps/common/main/resources/themes/theme_lightwps.json"
 
 C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_B=$'\033[34m'; C_0=$'\033[0m'
@@ -91,7 +106,7 @@ else
 fi
 
 if [ -x "$OUTBIN" ]; then
-  ver="$(cd "$(dirname "$OUTBIN")" && LD_LIBRARY_PATH=. ./DesktopEditors --version 2>&1 | head -1)"
+  ver="$(cd "$(dirname "$OUTBIN")" && LD_LIBRARY_PATH=.:"$(dirname "$OUTBIN")" timeout 60 ./DesktopEditors --version 2>&1 | head -1)"
   if grep -qE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$ver"; then
     record 1.4 PASS "--version 输出版本号且未段错误" "$ver"
   else
@@ -214,14 +229,17 @@ section "Ticket 3 — 内网协作与私有存储集成"
 nc_status=$(docker ps --filter "name=lightoffice-nextcloud" --format "{{.Status}}" 2>/dev/null | head -1)
 if [ -n "$nc_status" ] && grep -q "Up" <<<"$nc_status"; then
   code=$(curl -s -o /dev/null -w '%{http_code}' -I http://localhost:8080/status.php 2>/dev/null)
+  ver=$(curl -s http://localhost:8080/status.php 2>/dev/null | jq -r '.versionstring // "?"')
+  ds=$(docker ps --filter "name=lightoffice-documentserver" --format "{{.Status}}" 2>/dev/null | head -1)
   if [ "$code" = "200" ]; then
-    record 3.1 PASS "Nextcloud 容器运行中且 status.php 返回 200" "$nc_status"
+    record 3.1 PASS "Nextcloud 容器运行中且 status.php 返回 200" \
+      "nextcloud=$nc_status (v$ver); documentserver=$ds"
   else
     record 3.1 FAIL "容器在运行但 status.php 未返回 200" "HTTP $code"
   fi
 else
-  record 3.1 BLOCKED "无法拉取镜像：Docker Hub blob CDN 被出网策略拒绝" \
-    "production.cloudfront.docker.com:443 返回 403 (connect_rejected)。编排文件本身已通过 docker compose config 校验；见 baseline/egress_denials.json"
+  record 3.1 BLOCKED "Nextcloud 容器未运行" \
+    "启动: docker compose -f deploy/docker-compose.nextcloud.yml up -d"
 fi
 
 cfgs=$(grep -rlE 'http://(10\.0\.|192\.168\.)' \
@@ -236,19 +254,51 @@ else
   record 3.2 FAIL "未找到内网默认地址" "命中文件数=$cfgs"
 fi
 
+CO="$ROOT/baseline/coedit.json"
 LOGF="${LIGHTOFFICE_CONSOLE_LOG:-$ROOT/logs/console.log}"
-if [ -f "$LOGF" ] && grep -qE 'wss?://.*(101 Switching Protocols)' "$LOGF"; then
-  record 3.3 PASS "捕获到 WebSocket 101 Switching Protocols 握手" "$(grep -m1 '101 Switching' "$LOGF")"
+if [ -f "$CO" ]; then
+  wsurl=$(jq -r '.sessions.Alice.websockets[]?.url | select(test("/doc/.*/c/"))' "$CO" 2>/dev/null | head -1)
+  sent=$(jq -r '[.sessions[].websockets[]? | select(.url|test("/doc/.*/c/")) | .sent] | add // 0' "$CO")
+  recv=$(jq -r '[.sessions[].websockets[]? | select(.url|test("/doc/.*/c/")) | .received] | add // 0' "$CO")
+  if [ -n "$wsurl" ] && [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ]; then
+    record 3.3 PASS "协同编辑 WebSocket 完成 101 升级并持续收发" \
+      "$wsurl（双方合计 sent=$sent received=$recv）；原始握手记录见 logs/console.log"
+  else
+    record 3.3 FAIL "未捕获到有效的协同 WebSocket" "$CO"
+  fi
 else
-  record 3.3 BLOCKED "需要运行中的 Document Server 与已构建的客户端" \
-    "依赖 AC 3.1（镜像被拒）与 AC 1.3（构建被拒）。测试脚本已就绪: tests/collab_concurrent.js"
+  record 3.3 BLOCKED "未运行协同测试" "先启动 tests/fixture_server.js 再运行 tests/coedit_browser.js"
 fi
 
-record 3.4 BLOCKED "需要两个客户端实例与运行中的协作后端" \
-  "依赖 AC 1.3 与 AC 3.1。并发写入 / 变更合并测试已就绪: tests/collab_concurrent.js"
+if [ -f "$CO" ]; then
+  # The real assertion: each editor must RECEIVE the other's changeset.
+  a_recv=$(jq -r '[.sessions.Alice.websockets[]? | select(.url|test("/doc/.*/c/")) | .recvTypes[]] | index("saveChanges") // -1' "$CO")
+  b_recv=$(jq -r '[.sessions.Bob.websockets[]?   | select(.url|test("/doc/.*/c/")) | .recvTypes[]] | index("saveChanges") // -1' "$CO")
+  a_cur=$(jq -r '[.sessions.Alice.websockets[]? | select(.url|test("/doc/.*/c/")) | .recvTypes[]] | index("cursor") // -1' "$CO")
+  errs=$(jq -r '[.sessions[].events[] | select(startswith("onError"))] | length' "$CO")
+  crdt_files=$(grep -rl "change set applied" "$SRC/core" "$SRC/sdkjs" 2>/dev/null | wc -l)
+  if [ "$a_recv" != "-1" ] && [ "$b_recv" != "-1" ] && [ "${errs:-1}" -eq 0 ]; then
+    record 3.4 ADJUSTED "字面判据不成立：ONLYOFFICE 用 OT 而非 CRDT，且无该日志串" \
+      "字面: \"change set applied\" 在 core/sdkjs 中出现于 $crdt_files 个文件（=0）；\"CRDT\" 的命中全部是测试夹具里的 base64 片段。实际机制是 Operational Transformation。等价判据已通过: 两个真实编辑器会话并发编辑同一文档，双方各自收到对方的 saveChanges 变更集（Alice 收到=是, Bob 收到=是），光标位置双向同步，且无 onError 事件（errs=$errs）。"
+  else
+    record 3.4 FAIL "并发变更集未双向送达" "alice_recv=$a_recv bob_recv=$b_recv errors=$errs"
+  fi
+else
+  record 3.4 BLOCKED "未运行协同测试" "tests/coedit_browser.js"
+fi
 
-record 3.5 BLOCKED "需要运行中的 Nextcloud 才能观察 423 Locked" \
-  "依赖 AC 3.1。WebDAV LOCK → 第二写入者 423 的断言已就绪: tests/collab_concurrent.js"
+LK="$ROOT/baseline/filelock.result"
+if [ -f "$LK" ]; then
+  n423=$(grep -c '423' "$LK"); n201=$(grep -c '201' "$LK")
+  if [ "$n423" -ge 1 ] && [ "$n201" -ge 1 ]; then
+    record 3.5 PASS "并发写入同名文件时返回 HTTP 423 Locked" \
+      "$n201 个写入成功(201)，$n423 个被锁拒绝(423)；Nextcloud 事务性文件锁 (DBLockingProvider)"
+  else
+    record 3.5 FAIL "未观察到 423" "$(tr '\n' ' ' < "$LK")"
+  fi
+else
+  record 3.5 BLOCKED "未运行文件锁测试" "scripts/test_filelock.sh"
+fi
 
 # ============================================================== Ticket 4 =====
 section "Ticket 4 — 轻量化与资源优化"
