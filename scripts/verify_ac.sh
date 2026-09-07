@@ -30,7 +30,22 @@ SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
 
 WEB="$SRC/web-apps"
 DESK="$SRC/desktop-apps"
-OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
+# The desktop binary lands in desktop-apps/win-linux/build/<platform>/ when built
+# in place, and under out/ once packaged. Search both rather than guessing.
+find_binary() {
+  local c
+  for c in \
+    "$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+    "$SRC/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+    "$SRC/desktop-apps/win-linux/build/linux_64/DesktopEditors" \
+    "$SRC/desktop-apps/win-linux/build/DesktopEditors"; do
+    [ -x "$c" ] && { echo "$c"; return; }
+  done
+  find "$SRC/desktop-apps" "$(dirname "$SRC")/out" -type f -name DesktopEditors \
+       -perm -u+x 2>/dev/null | head -1
+}
+OUTBIN="$(find_binary)"
+[ -n "$OUTBIN" ] || OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
 THEME="$WEB/apps/common/main/resources/themes/theme_lightwps.json"
 
 C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_B=$'\033[34m'; C_0=$'\033[0m'
@@ -91,7 +106,7 @@ else
 fi
 
 if [ -x "$OUTBIN" ]; then
-  ver="$(cd "$(dirname "$OUTBIN")" && LD_LIBRARY_PATH=. ./DesktopEditors --version 2>&1 | head -1)"
+  ver="$(cd "$(dirname "$OUTBIN")" && LD_LIBRARY_PATH=.:"$(dirname "$OUTBIN")" timeout 60 ./DesktopEditors --version 2>&1 | head -1)"
   if grep -qE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$ver"; then
     record 1.4 PASS "--version 输出版本号且未段错误" "$ver"
   else
