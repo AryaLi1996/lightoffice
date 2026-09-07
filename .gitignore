@@ -11,3 +11,6 @@
 node_modules/
 __pycache__/
 *.pyc
+
+# Fixture server working dir
+/tests/fixtures/*.tmp

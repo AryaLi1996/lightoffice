@@ -1,0 +1,73 @@
+{
+  "generated": "2026-09-07T06:24:30.606Z",
+  "documentKey": "lo-coedit-1788762242885",
+  "sessions": {
+    "Alice": {
+      "events": [
+        "onAppReady",
+        "onDocumentReady"
+      ],
+      "websockets": [
+        {
+          "url": "ws://10.0.7.20/9.4.0-3d837c7ba13da7ff2e00ea3871a7c401/doc/lo-coedit-1788762242885/c/?shardkey=lo-coedit-1788762242885&EIO=4&transport=websocket",
+          "sent": 33,
+          "received": 35,
+          "sentTypes": [
+            "auth",
+            "clientLog",
+            "cursor",
+            "getMessages",
+            "isSaveLock",
+            "saveChanges",
+            "unLockDocument"
+          ],
+          "recvTypes": [
+            "auth",
+            "connectState",
+            "cursor",
+            "documentOpen",
+            "license",
+            "message",
+            "saveChanges",
+            "saveLock",
+            "unSaveLock"
+          ]
+        }
+      ]
+    },
+    "Bob": {
+      "events": [
+        "onAppReady",
+        "onDocumentReady"
+      ],
+      "websockets": [
+        {
+          "url": "ws://10.0.7.20/9.4.0-3d837c7ba13da7ff2e00ea3871a7c401/doc/lo-coedit-1788762242885/c/?shardkey=lo-coedit-1788762242885&EIO=4&transport=websocket",
+          "sent": 33,
+          "received": 34,
+          "sentTypes": [
+            "auth",
+            "clientLog",
+            "cursor",
+            "getMessages",
+            "isSaveLock",
+            "saveChanges",
+            "unLockDocument"
+          ],
+          "recvTypes": [
+            "auth",
+            "cursor",
+            "documentOpen",
+            "license",
+            "message",
+            "saveChanges",
+            "saveLock",
+            "unSaveLock",
+            "waitAuth"
+          ]
+        }
+      ]
+    }
+  },
+  "failures": 0
+}

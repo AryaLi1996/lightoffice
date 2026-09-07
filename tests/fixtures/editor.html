@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><title>LightOffice co-edit</title>
+<style>html,body{margin:0;height:100%}#ph{height:100%}</style></head>
+<body><div id="ph"></div>
+<script src="http://10.0.7.20/web-apps/apps/api/documents/api.js"></script>
+<script>
+  const p = new URLSearchParams(location.search);
+  window.__events = [];
+  const cfg = {
+    document: {
+      fileType: "docx",
+      key: p.get("key"),
+      title: "collab.docx",
+      url: "http://10.0.7.1:8099/collab.docx",
+      permissions: { edit: true, download: true }
+    },
+    documentType: "word",
+    editorConfig: {
+      mode: "edit",
+      lang: "en",
+      callbackUrl: "http://10.0.7.1:8099/callback",
+      user: { id: p.get("uid"), name: p.get("uname") },
+      customization: { autosave: true, forcesave: false }
+    },
+    token: p.get("token"),
+    width: "100%", height: "100%",
+    events: {
+      onAppReady:      () => window.__events.push("onAppReady"),
+      onDocumentReady: () => window.__events.push("onDocumentReady"),
+      onError:         (e) => window.__events.push("onError:" + JSON.stringify(e && e.data)),
+      onWarning:       (e) => window.__events.push("onWarning:" + JSON.stringify(e && e.data))
+    }
+  };
+  window.__editor = new DocsAPI.DocEditor("ph", cfg);
+</script></body></html>
