@@ -130,14 +130,83 @@ docker exec lightoffice-documentserver tail -n 100 /var/log/onlyoffice/documents
 docker exec -u www-data lightoffice-nextcloud php occ log:tail -n 50
 ```
 
-常见问题：
+常见问题（症状 → 原因 → 处理）：
 
-- **客户端提示 “untrusted domain”** — 该地址不在 `trusted_domains` 中，
-  见第 7 步；修改后需 `docker compose restart nextcloud`。
-- **文档打开后一直转圈** — 通常是 JWT 不一致。Nextcloud 侧 `jwt_secret`
-  必须与 Document Server 的 `JWT_SECRET` 完全相同（第 2、6 步）。
-- **协同编辑不同步** — 确认 Document Server 的 WebSocket 未被反向代理拦截，
-  代理需转发 `Upgrade` 与 `Connection` 头。
+以下每一条都是本项目在真实部署中实际遇到过的故障，不是设想出来的情形。
+它们的共同点是：症状与根因之间没有明显关联，日志里也不会直接写出原因。
+
+**1. 客户端提示 "untrusted domain"**
+
+- 原因：访问用的地址不在 Nextcloud 的 `trusted_domains` 列表中。
+- 处理：按第 7 步加入该地址，然后
+  `docker compose -f deploy/docker-compose.nextcloud.yml restart nextcloud`。
+- 验证：`docker exec -u www-data lightoffice-nextcloud php occ config:system:get trusted_domains`
+
+**2. 文档打开后一直转圈，或报 `errorCode -20`**
+
+- 原因：JWT 密钥两侧不一致。Nextcloud 的 `jwt_secret` 必须与 Document Server
+  的 `JWT_SECRET` 完全相同。
+- 注意：`-20` 的字面含义是"security token is not correctly formed"，它**不会**
+  告诉你哪一侧不对。取密钥时务必锚定行首并保留整个值：
+
+  ```bash
+  # 正确
+  grep '^DOCSERVER_JWT_SECRET=' deploy/.env | cut -d= -f2-
+  # 错误：会匹配到上方的注释行，且含 '=' 的密钥会被截断
+  grep DOCSERVER_JWT_SECRET deploy/.env | cut -d= -f2
+  ```
+
+- 验证：两侧取出的值用 `sha256sum` 比对，不要用肉眼。
+
+**3. 协同编辑不同步，或 WebSocket 握手失败**
+
+- 原因：反向代理没有转发 `Upgrade` / `Connection` 头，WebSocket 升级被拦截。
+- 处理：确认代理配置中存在这两个头的转发规则。
+- 验证：浏览器开发者工具中应能看到 `101 Switching Protocols`；
+  或运行 `node tests/coedit_browser.js`，它会断言这次升级确实发生。
+
+**4. Nextcloud 安装后报 HTTP 500，日志只说数据库连不上**
+
+- 原因：`MYSQL_HOST` 写成了容器网桥 IP。Nextcloud 在首次安装时会把 `dbhost`
+  **固化写入** `config.php`；此后只要网桥网段变化（重建、Docker 重启、
+  与其它网络冲突而自动改号），数据库就再也连不上，而错误信息里完全看不出
+  这层因果。
+- 处理：`MYSQL_HOST` 必须使用服务名 `db`，由 Docker 内部 DNS 解析。
+- 验证：`docker exec -u www-data lightoffice-nextcloud php occ config:system:get dbhost`
+  应返回 `db`，而不是一个 IP。
+
+**5. 客户端连不上，但服务端一切正常**
+
+- 原因：客户端里配置的是**容器网桥地址**（如 `172.28.7.x`）。该地址只在
+  Docker 宿主机内部可路由，任何真实客户端都到不了。这类配置能通过
+  `docker compose config` 校验，也能通过 CI，因为它语法完全正确。
+- 处理：客户端地址必须是宿主机地址加已发布端口（`443` / `8443`）。
+- 验证：**从另一台机器**执行
+  `curl -k https://<宿主机地址>/status.php`，不要在宿主机上验证。
+
+**6. `curl` 返回 HTTP 000，服务却显示 healthy**
+
+- 原因：TLS 证书缺失或未挂载，连接在握手阶段就断了，因此没有任何 HTTP 状态码。
+  `000` 表示"根本没建立连接"，不是"服务返回了错误"。
+- 处理：运行 `scripts/gen_tls_cert.sh` 生成证书后重启代理。
+- 验证：`docker exec lightoffice-proxy ls -l /etc/nginx/certs/`
+
+**7. Docker 守护进程重启后，宿主机端口不再监听**
+
+- 原因：`dockerd` 重启后已发布端口的 iptables 规则可能未被重建，容器仍在运行
+  且 healthy，但宿主机上没有监听者。
+- 处理：`docker compose -f deploy/docker-compose.nextcloud.yml up -d --force-recreate proxy`
+  重建端口映射。
+- 验证：`ss -ltnp | grep -E ':(443|8443)'` 应有输出。
+
+**8. 网络中断后编辑器变成只读**
+
+- 这不是故障，是设计如此。ONLYOFFICE 的合并在服务端完成（Operational
+  Transformation），断网时没有可合并的对象，编辑器会**拒绝**输入而不是接收
+  后丢弃——这正是它不丢数据的方式。
+- 若文档中还有其他协作者，网络恢复后会自动恢复编辑。若断网者是**唯一**的
+  使用者，实测会持续保持只读（观察 120 秒无变化），需要刷新页面。
+- 验证：`node tests/offline_test.js`
 
 ---
 

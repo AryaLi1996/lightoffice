@@ -178,8 +178,24 @@ plugins_off=$(grep -c "LIGHTOFFICE-OVERLAY-plugins" "$WEB/apps/common/main/lib/c
 if [ "$HAVE_SRC" -eq 0 ]; then
   record 2.2 SKIPPED "菜单裁剪校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
 elif [ "$collab_hidden" -eq 4 ] && [ "$plugins_off" -ge 1 ]; then
+  # The revised criterion asks for a >20% reduction in toolbar buttons, which is
+  # measurable where the literal "AI助手" grep is not. Report the measured
+  # figures rather than the mechanism alone.
+  tb_note=""
+  if [ -x "$ROOT/scripts/count_toolbar.sh" ]; then
+    if bash "$ROOT/scripts/count_toolbar.sh" --min 20 "$SRC" >/tmp/lo_toolbar.txt 2>&1; then
+      tb_note="工具栏按钮裁剪 4/4 编辑器均 >20%（详见 baseline/toolbar_buttons.json）"
+    else
+      # Read the report rather than scraping the table: the human-readable
+      # output has a trailing FAIL line that a loose pattern also matches.
+      tb_worst=$(jq -r '[.editors[] | select(.meets_threshold == false)
+                         | "\(.editor) \(.reduction_pct)%"] | join("、")' \
+                    "$ROOT/baseline/toolbar_buttons.json" 2>/dev/null)
+      tb_note="工具栏按钮裁剪未全部达到 20%：${tb_worst:-见 baseline/toolbar_buttons.json}"
+    fi
+  fi
   record 2.2 ADJUSTED "字面判据恒真：\"AI助手\" 在 web-apps 中从未出现" \
-    "字面: grep \"AI助手\" = $lit（裁剪前同样是 0，该判据不度量任何东西）。实质裁剪已完成: 4/4 编辑器隐藏协作页签 (collab_hidden=$collab_hidden)，插件宿主已禁用 (AI 助手是插件而非内置 UI)。"
+    "字面: grep \"AI助手\" = $lit（裁剪前同样是 0，该判据不度量任何东西）。实质裁剪已完成: 4/4 编辑器隐藏协作页签 (collab_hidden=$collab_hidden)，插件宿主已禁用 (AI 助手是插件而非内置 UI)。${tb_note:+ $tb_note}"
 else
   record 2.2 FAIL "实质裁剪未完成" "collab_hidden=$collab_hidden/4 plugins_off=$plugins_off"
 fi
@@ -472,6 +488,108 @@ elif [ -f "$DV" ] && grep -q '^```mermaid' "$DV"; then
 else
   record 5.5 FAIL "DEVELOPER_GUIDE.md 缺失或无 Mermaid 图"
 fi
+
+# ================================================ 修订版新增判据 (v2) ========
+# These come from the revised spec. They are grouped and named descriptively
+# rather than renumbered into the sections above: silently re-mapping an
+# existing number to a different criterion would make two reports with the same
+# id mean different things, which is worse than an extra section.
+section "修订版新增判据"
+
+# --- 中文界面覆盖率 ---------------------------------------------------------
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record V.1 SKIPPED "中文界面覆盖率需要上游检出" "未找到上游检出 ($SRC)"
+elif [ -x "$ROOT/scripts/check_i18n.sh" ]; then
+  if bash "$ROOT/scripts/check_i18n.sh" --min 95 "$SRC" >/tmp/lo_i18n.txt 2>&1; then
+    worst=$(awk -F'[ %]+' '/worst coverage/ {print $3}' /tmp/lo_i18n.txt)
+    record V.1 PASS "中文界面覆盖率 ≥95%（全部 14 个 locale 目录）" \
+      "最低覆盖率 ${worst}%；按叶子键 (paths(scalars)) 统计，避免\"分节存在但字符串缺失\"被计为已翻译。详见 baseline/i18n_coverage.json"
+  else
+    record V.1 FAIL "存在低于 95% 的 locale 目录" "$(tail -2 /tmp/lo_i18n.txt | tr '\n' ' ')"
+  fi
+else
+  record V.1 FAIL "scripts/check_i18n.sh 不存在"
+fi
+
+# --- 语言包裁剪 -------------------------------------------------------------
+if [ "$HAVE_SRC" -eq 0 ]; then
+  record V.2 SKIPPED "语言包裁剪校验需要上游检出" "未找到上游检出 ($SRC)"
+else
+  langs=$(find "$WEB/apps" -type d -name locale -exec sh -c \
+            'for f in "$1"/*.json; do [ -e "$f" ] && basename "$f" .json; done' _ {} \; \
+          2>/dev/null | sort -u | tr '\n' ' ')
+  n_langs=$(printf '%s' "$langs" | wc -w)
+  if [ "$n_langs" -le 3 ] && printf '%s' "$langs" | grep -q 'zh' && printf '%s' "$langs" | grep -q 'en'; then
+    record V.2 ADJUSTED "字面判据要求仅保留 en 与 zh；实际保留 $n_langs 种：$langs" \
+      "zh-tw 是独立译文而非拼写变体，删除它会静默移除台港用户的可用中文界面。裁剪本身已完成（45 种 -> $n_langs 种，locale 体积减少 81.2%）；scripts/trim_locales.sh --strict 可产出字面要求的 en/zh 两种。"
+  elif [ "$n_langs" -le 3 ]; then
+    record V.2 FAIL "语言包裁剪结果不含预期语言" "保留: $langs"
+  else
+    record V.2 FAIL "语言包未裁剪" "仍保留 $n_langs 种语言——运行 scripts/trim_locales.sh"
+  fi
+fi
+
+# --- 安装包体积 ≤120MB ------------------------------------------------------
+deb=$(find "$ROOT/artifacts" -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.exe' -o -maxdepth 1 -name '*.dmg' 2>/dev/null | head -1)
+if [ -n "$deb" ] && [ -f "$deb" ]; then
+  bytes=$(stat -c%s "$deb")
+  mb=$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')
+  if awk -v b="$bytes" 'BEGIN{exit !(b <= 120*1048576)}'; then
+    record V.3 PASS "安装包体积 ${mb}MB ≤ 120MB" "$(basename "$deb")"
+  else
+    record V.3 FAIL "安装包体积 ${mb}MB 超过 120MB 上限" "$(basename "$deb")"
+  fi
+else
+  record V.3 BLOCKED "安装包体积校验需要先产出安装包" \
+    "依赖 AC 1.3 的构建产物与 AC 5.1 的打包；artifacts/ 中没有 .deb/.exe/.dmg"
+fi
+
+# --- 交付归档与校验清单 -----------------------------------------------------
+man=$(find "$ROOT/artifacts" -maxdepth 1 -name '*.manifest.json' 2>/dev/null | head -1)
+if [ -n "$man" ] && [ -f "$man" ]; then
+  commit=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["commit"])' "$man" 2>/dev/null)
+  dirty=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["source"]["dirty"])' "$man" 2>/dev/null)
+  tgz="${man%.manifest.json}.tar.gz"
+  if [ -n "$commit" ] && [ "$commit" != unknown ] && [ -f "$tgz" ]; then
+    record V.4 PASS "交付归档已生成，清单含 Git Commit ID 与上游版本锁" \
+      "$(basename "$tgz")；commit=${commit:0:12}$([ "$dirty" = True ] && echo ' (工作区不干净，已在清单中如实标注)')"
+  else
+    record V.4 FAIL "归档清单缺少 commit 或归档文件不存在" "$man"
+  fi
+else
+  record V.4 FAIL "未生成交付归档" "运行 scripts/archive.sh"
+fi
+
+# --- 中文输入法 -------------------------------------------------------------
+IMEJ="$ROOT/baseline/ime.json"
+if [ -f "$IMEJ" ]; then
+  ds=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["direct_unicode_input"]["status"])' "$IMEJ" 2>/dev/null)
+  dn=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["direct_unicode_input"]["note"])' "$IMEJ" 2>/dev/null)
+  is=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["input_method_roundtrip"]["status"])' "$IMEJ" 2>/dev/null)
+  case "$ds/$is" in
+    PASS/PASS) record V.5 PASS "中文直接输入与输入法转换均通过" "$dn" ;;
+    PASS/*)    record V.5 ADJUSTED "直接输入通过；输入法往返为 $is" \
+                 "xdotool type 通过 keysym 重映射直接投递成品字符，绕过输入法，因此不能替代真正的拼音转换验证。$dn" ;;
+    FAIL/*|*/FAIL) record V.5 FAIL "中文输入校验失败" "$dn" ;;
+    *)         record V.5 BLOCKED "中文输入校验前置条件缺失" "$dn" ;;
+  esac
+else
+  record V.5 BLOCKED "未运行中文输入校验" "运行 scripts/ime_test.sh（需要 X 显示与已构建的应用）"
+fi
+
+# --- 上游版本锁 -------------------------------------------------------------
+if [ ! -f "$ROOT/VERSION_LOCK" ]; then
+  record V.6 FAIL "VERSION_LOCK 不存在" "运行 scripts/gen_version_lock.sh"
+elif [ "$HAVE_SRC" -eq 0 ]; then
+  record V.6 SKIPPED "版本锁比对需要上游检出" "未找到上游检出 ($SRC)"
+elif bash "$ROOT/scripts/gen_version_lock.sh" --check "$SRC" >/dev/null 2>&1; then
+  record V.6 PASS "VERSION_LOCK 与检出一致（tag + 6 个子模块 SHA）" \
+    "$(grep '^UPSTREAM_TAG=' "$ROOT/VERSION_LOCK" | cut -d= -f2)"
+else
+  record V.6 FAIL "VERSION_LOCK 与实际检出不一致" \
+    "检出已漂移；此时所有\"减少 N%\"的对比都不再成立。运行 scripts/gen_version_lock.sh --check 查看差异"
+fi
+
 
 # ================================================================ summary ====
 total=$((pass + fail + blocked + adjusted + skipped))

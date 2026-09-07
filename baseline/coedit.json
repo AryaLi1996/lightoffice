@@ -1,6 +1,6 @@
 {
-  "generated": "2026-09-07T14:27:59.291Z",
-  "documentKey": "lo-coedit-1788791249633",
+  "generated": "2026-09-07T16:26:25.274Z",
+  "documentKey": "lo-coedit-1788798353830",
   "sessions": {
     "Alice": {
       "events": [
@@ -9,42 +9,9 @@
       ],
       "websockets": [
         {
-          "url": "wss://localhost:8443/9.4.0-9b2c1774707c640ace926a277b1ca2b0/doc/lo-coedit-1788791249633/c/?shardkey=lo-coedit-1788791249633&EIO=4&transport=websocket",
-          "sent": 34,
-          "received": 37,
-          "sentTypes": [
-            "auth",
-            "clientLog",
-            "cursor",
-            "getMessages",
-            "isSaveLock",
-            "saveChanges",
-            "unLockDocument"
-          ],
-          "recvTypes": [
-            "auth",
-            "connectState",
-            "cursor",
-            "documentOpen",
-            "license",
-            "message",
-            "saveChanges",
-            "saveLock",
-            "unSaveLock"
-          ]
-        }
-      ]
-    },
-    "Bob": {
-      "events": [
-        "onAppReady",
-        "onDocumentReady"
-      ],
-      "websockets": [
-        {
-          "url": "wss://localhost:8443/9.4.0-9b2c1774707c640ace926a277b1ca2b0/doc/lo-coedit-1788791249633/c/?shardkey=lo-coedit-1788791249633&EIO=4&transport=websocket",
-          "sent": 34,
-          "received": 38,
+          "url": "wss://localhost:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-coedit-1788798353830/c/?shardkey=lo-coedit-1788798353830&EIO=4&transport=websocket",
+          "sent": 31,
+          "received": 34,
           "sentTypes": [
             "auth",
             "clientLog",
@@ -64,6 +31,39 @@
             "saveLock",
             "unSaveLock",
             "waitAuth"
+          ]
+        }
+      ]
+    },
+    "Bob": {
+      "events": [
+        "onAppReady",
+        "onDocumentReady"
+      ],
+      "websockets": [
+        {
+          "url": "wss://localhost:8443/9.4.0-07300c1e83b5a8aac684e06d438261ec/doc/lo-coedit-1788798353830/c/?shardkey=lo-coedit-1788798353830&EIO=4&transport=websocket",
+          "sent": 34,
+          "received": 35,
+          "sentTypes": [
+            "auth",
+            "clientLog",
+            "cursor",
+            "getMessages",
+            "isSaveLock",
+            "saveChanges",
+            "unLockDocument"
+          ],
+          "recvTypes": [
+            "auth",
+            "connectState",
+            "cursor",
+            "documentOpen",
+            "license",
+            "message",
+            "saveChanges",
+            "saveLock",
+            "unSaveLock"
           ]
         }
       ]
