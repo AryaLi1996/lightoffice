@@ -88,21 +88,26 @@ else
 fi
 
 n_cmake=$(find "$SRC" -name CMakeLists.txt 2>/dev/null | wc -l)
-n_pro=$(find "$SRC" -name '*.pro' 2>/dev/null | wc -l)
-n_pri=$(find "$SRC" -name '*.pri' 2>/dev/null | wc -l)
-n_cxx=$(find "$SRC/core" \( -name '*.cpp' -o -name '*.h' \) 2>/dev/null | wc -l)
-if [ "$n_cmake" -gt 50 ]; then
-  record 1.2 PASS "CMakeLists.txt 数量 $n_cmake > 50"
+# Third-party trees (boost, ICU, OpenSSL, CEF) are fetched into Common/3dParty
+# during the build and bring thousands of their own files with them. Counting
+# those would let this criterion pass for a reason unrelated to whether
+# ONLYOFFICE's own C++ modules are present, so report both numbers.
+n_cmake_own=$(find "$SRC" -name CMakeLists.txt -not -path "*/3dParty/*" 2>/dev/null | wc -l)
+n_pro=$(find "$SRC" -name '*.pro' -not -path "*/3dParty/*" 2>/dev/null | wc -l)
+n_pri=$(find "$SRC" -name '*.pri' -not -path "*/3dParty/*" 2>/dev/null | wc -l)
+n_cxx=$(find "$SRC/core" \( -name '*.cpp' -o -name '*.h' \) -not -path "*/3dParty/*" 2>/dev/null | wc -l)
+if [ "$n_cmake_own" -gt 50 ]; then
+  record 1.2 PASS "CMakeLists.txt 数量 $n_cmake_own > 50（已排除 3dParty）"
 else
   record 1.2 ADJUSTED "字面判据不成立：ONLYOFFICE 用 qmake 构建，不是 CMake" \
-    "字面: CMakeLists.txt=$n_cmake (要求 >50) → 不满足。等价判据: qmake .pro=$n_pro, .pri=$n_pri, core C/C++ 源文件=$n_cxx → 核心 C++ 模块完整。上游全树仅有 $n_cmake 个 CMakeLists.txt，无论克隆是否完整都不可能 >50。"
+    "字面: 全树 CMakeLists.txt=$n_cmake，但其中仅 $n_cmake_own 个属于 ONLYOFFICE 自身——其余来自构建期拉取的第三方源码树 (boost/ICU/OpenSSL/CEF)，与\"核心 C++ 模块是否完整\"无关。等价判据: qmake .pro=$n_pro, .pri=$n_pri, core C/C++ 源文件=$n_cxx → 核心 C++ 模块完整。"
 fi
 
 if [ -x "$OUTBIN" ] && file "$OUTBIN" 2>/dev/null | grep -q ELF; then
   record 1.3 PASS "构建产物存在且为 ELF 可执行文件" "$OUTBIN"
 else
-  record 1.3 BLOCKED "无法构建：automate.py 的引导依赖被网络策略拒绝" \
-    "build_tools_data 的 python3.tar.gz / qt_binary_5.9.9 raw 下载返回 HTTP 403；其 git LFS 对象在匿名读取通道不提供。详见 scripts/build_desktop.sh --check-only"
+  record 1.3 BLOCKED "无法构建：v8 的来源主机被出网策略拒绝" \
+    "构建在 v8 依赖处受阻：core/DesktopEditor/doctrenderer 需要 JS 引擎，Linux 下唯一替代 (use_javascript_core) 只链接 Apple 框架与 Objective-C 源码，仅限 macOS/iOS。v8 需 depot_tools + gclient，来源 chromium.googlesource.com 与 CIPD 均被出网策略拒绝 (HTTP 000/403)。其余依赖已全部解决：boost / CEF / ICU / OpenSSL 均已成功构建，python3 与 CEF 经 git 通道取得 (scripts/fetch_prebuilts.sh)，Qt 用系统 5.15.13。诊断：scripts/build_desktop.sh --check-only"
 fi
 
 if [ -x "$OUTBIN" ]; then
@@ -352,10 +357,10 @@ else
 fi
 
 record 4.4 BLOCKED "冷启动基准需要原版与优化版两个构建产物" \
-  "依赖 AC 1.3。基准脚本已就绪: tests/benchmark.js"
+  "依赖 AC 1.3（v8 受阻）。基准脚本已就绪: tests/benchmark.js —— 注意该判据需要两次构建（未优化基线 + 优化版）才能比较。"
 
 record 4.5 BLOCKED "峰值内存 (Max RSS) 基准需要可运行的构建产物" \
-  "依赖 AC 1.3。tests/benchmark.js 使用 /usr/bin/time -v 采集"
+  "依赖 AC 1.3（v8 受阻）。tests/benchmark.js 使用 /usr/bin/time -v 采集 Max RSS。"
 
 # ============================================================== Ticket 5 =====
 section "Ticket 5 — 打包、系统测试与文档交付"

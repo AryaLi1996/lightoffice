@@ -13,7 +13,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}"
-BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-/home/user/build_tools}"
+BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 CHECK_ONLY=0
 [ "${1:-}" = "--check-only" ] && CHECK_ONLY=1
 
@@ -26,46 +26,64 @@ echo "Preflight checks"
 
 fatal=0
 
-# 1. build_tools present
+# 1. build_tools present, laid out as a sibling of core/ etc.
 if [ -d "$BUILD_TOOLS/tools/linux" ]; then
   ok "build_tools present ($BUILD_TOOLS)"
 else
   bad "build_tools missing — run scripts/bootstrap.sh"; fatal=1
 fi
 
-# 2. The bootstrap Python tarball. automate.py's first action is ./python.sh,
-#    which wgets this. A 403 here means the whole pipeline cannot start.
-code=$(curl -s -o /dev/null -w '%{http_code}' -L "$DATA_BASE/python/python3.tar.gz" || echo 000)
-if [ "$code" = "200" ]; then
-  ok "bootstrap python3 reachable"
+# 2. Bootstrap python and CEF. These live in the build_tools_data repo, whose raw
+#    HTTPS URLs are commonly blocked, but they are ordinary git blobs (only the Qt
+#    tarballs and sysroots are LFS-tracked there), so a sparse git checkout gets
+#    them. scripts/fetch_prebuilts.sh does exactly that.
+if [ -x "$BUILD_TOOLS/tools/linux/python3/bin/python3" ]; then
+  ok "bootstrap python3 present"
 else
-  bad "bootstrap python3 unreachable (HTTP $code) — $DATA_BASE/python/python3.tar.gz"
-  fatal=1
+  bad "bootstrap python3 missing — run scripts/fetch_prebuilts.sh"; fatal=1
+fi
+if [ -d "$SRC/core/Common/3dParty/cef/linux_64/build" ]; then
+  ok "CEF binaries staged"
+else
+  bad "CEF missing — run scripts/fetch_prebuilts.sh"; fatal=1
 fi
 
-# 3. Prebuilt Qt. Fetched by qt_binary_fetch.py; also LFS-backed in the data repo,
-#    so an anonymous git lane returns a 133-byte pointer rather than the archive.
-code=$(curl -s -o /dev/null -w '%{http_code}' -L "$DATA_BASE/qt/qt_binary_5.9.9_gcc_64.7z" || echo 000)
-if [ "$code" = "200" ]; then
-  ok "prebuilt Qt 5.9.9 reachable"
+# 3. Qt. The prebuilt Qt 5.9.9 in build_tools_data IS LFS-tracked and therefore
+#    unavailable on an anonymous git lane — but upstream ships use_system_qt.py
+#    for exactly this case, and the distro Qt5 works.
+if [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ] || [ -d "$BUILD_TOOLS/tools/linux/qt_build" ]; then
+  ok "Qt available ($( [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ] && echo system Qt || echo prebuilt Qt ))"
 else
-  bad "prebuilt Qt unreachable (HTTP $code) — $DATA_BASE/qt/qt_binary_5.9.9_gcc_64.7z"
-  bad "  (system Qt is a fallback: build_tools/tools/linux/use_system_qt.py)"
-  fatal=1
+  bad "no Qt — run: (cd $BUILD_TOOLS/tools/linux && python3 use_system_qt.py)"; fatal=1
 fi
 
-# 4. Disk. A full build materialises Qt, a sysroot, CEF and all object files.
+# 4. v8. This is the one dependency with no supported substitute on Linux:
+#    core/DesktopEditor/doctrenderer needs a JS engine, and use_javascript_core
+#    (the only alternative) links Apple frameworks and Objective-C sources, so it
+#    is macOS/iOS only. Building v8 means depot_tools + gclient sync, which pull
+#    from chromium.googlesource.com and the CIPD service.
+for host in chromium.googlesource.com chrome-infra-packages.appspot.com; do
+  code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "https://$host/" 2>/dev/null || true); code="${code:-000}"
+  if [ "$code" != "000" ] && [ "$code" != "403" ] && [ "$code" != "407" ]; then
+    ok "$host reachable (HTTP $code)"
+  else
+    bad "$host unreachable (HTTP $code) — v8 cannot be fetched or built"
+    fatal=1
+  fi
+done
+
+# 5. Disk. A full build materialises boost, ICU, OpenSSL, CEF, v8 and all objects.
 avail_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
-if [ "${avail_gb:-0}" -ge 60 ]; then
+if [ "${avail_gb:-0}" -ge 40 ]; then
   ok "disk: ${avail_gb}G available"
 else
-  bad "disk: ${avail_gb}G available; a full desktop build needs roughly 60G"
+  bad "disk: ${avail_gb}G available; a full desktop build needs roughly 40G"
   fatal=1
 fi
 
 echo
 if [ "$fatal" -ne 0 ]; then
-  echo "Preflight FAILED — automate.py would abort. Nothing was built." >&2
+  echo "Preflight FAILED — the build would abort. Nothing was built." >&2
   echo "See docs/DEVELOPER_GUIDE.md §3 for what the pipeline needs." >&2
   exit 2
 fi
@@ -74,18 +92,25 @@ ok "preflight passed"
 [ "$CHECK_ONLY" -eq 1 ] && { echo "--check-only: stopping before build."; exit 0; }
 
 echo
+echo
 echo "Running upstream build (this takes hours) ..."
-cd "$BUILD_TOOLS/tools/linux"
-./automate.py desktop
+cd "$BUILD_TOOLS"
+QT_DIR="$BUILD_TOOLS/tools/linux/system_qt"
+[ -d "$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9" ] && QT_DIR="$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9"
+# --sysroot 0: the ubuntu16 sysroot is LFS-tracked and only affects glibc
+# compatibility of the shipped binary, not whether it builds.
+./tools/linux/python3/bin/python3 ./configure.py \
+    --branch master --module desktop --sysroot 0 --update 0 --qt-dir "$QT_DIR"
+./tools/linux/python3/bin/python3 ./make.py
 rc=$?
 
-BIN="$SRC/../out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
+BIN="$(find "$SRC/desktop-apps" "$SRC/../out" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)"
 echo
-echo "automate.py exit code: $rc"
-if [ -x "$BIN" ]; then
+echo "build exit code: $rc"
+if [ -n "$BIN" ] && [ -x "$BIN" ]; then
   ok "binary: $BIN"
   file "$BIN"
 else
-  bad "expected binary not found at $BIN"
+  bad "no DesktopEditors binary produced"
 fi
 exit $rc
