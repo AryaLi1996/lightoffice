@@ -12,13 +12,20 @@
 
 ```bash
 scripts/bootstrap.sh              # clone 上游 DesktopEditors + build_tools
+scripts/fetch_prebuilts.sh        # 经 git 通道取得引导 python3 与 CEF，并链接系统 Qt
 scripts/apply_overlay.sh          # 主题 / 品牌 / 菜单裁剪 / 内网云
 scripts/apply_build_flags.sh      # -Os / --gc-sections / strip
 scripts/trim_dictionaries.sh      # 词典裁剪 (239M -> 15M)
 scripts/optimize_assets.sh        # 静态资源压缩 (--lossy 可选)
-scripts/build_desktop.sh          # 调用上游 automate.py（先跑 --check-only）
+scripts/build_desktop.sh --check-only   # 先确认依赖齐备，再去掉该参数正式构建
 scripts/package.sh                # 产出安装包 + checksums
 scripts/verify_ac.sh              # 逐条核对 25 项验收标准
+
+# 内网协作栈与协同测试
+docker compose -f deploy/docker-compose.nextcloud.yml up -d
+node tests/fixture_server.js &            # 供 Document Server 取文档与回调
+node tests/coedit_browser.js              # 两个真实编辑器会话并发协同 (AC 3.3/3.4)
+scripts/test_filelock.sh                  # 并发写入 -> 423 Locked (AC 3.5)
 ```
 
 ## 仓库结构
@@ -40,39 +47,45 @@ scripts/verify_ac.sh              # 逐条核对 25 项验收标准
 
 | 判定 | 数量 | 含义 |
 |---|---|---|
-| PASS | 10 | 断言通过 |
-| ADJUSTED | 2 | 判据字面前提与代码库不符，同时给出字面结果与等价判据 |
-| BLOCKED | 13 | 本环境无法评估（原因见下） |
+| PASS | 13 | 断言通过 |
+| ADJUSTED | 3 | 判据字面前提与代码库不符，同时给出字面结果与等价判据 |
+| BLOCKED | 9 | 本环境无法评估（原因见下） |
 | FAIL | 0 | — |
 
-### 两项 ADJUSTED
+### 三项 ADJUSTED
 
-- **AC 1.2**（`CMakeLists.txt > 50`）—— ONLYOFFICE 使用 **qmake** 构建。
-  全树只有 32 个 `CMakeLists.txt`（其中 27 个属于 `desktop-sdk`），
-  而 `.pro` 有 137 个、`.pri` 有 58 个。无论克隆是否完整，该判据都不可能成立。
-  等价判据（qmake 工程文件数 + `core` 的 12,254 个 C/C++ 源文件）已通过。
+这些判据的字面断言在本代码库中**不可能成立**，因此同时报告字面结果与等价判据，
+而不是悄悄放行：
+
+- **AC 1.2**（`CMakeLists.txt > 50`）—— ONLYOFFICE 使用 **qmake**。属于 ONLYOFFICE
+  自身的 `CMakeLists.txt` 只有 32 个（其中 27 个在 `desktop-sdk`），而 `.pro` 有 127 个。
+  构建期会拉取 boost/ICU/OpenSSL/CEF 的源码树，使全树计数涨到 237——但那与
+  「核心 C++ 模块是否完整」无关，所以判定按排除 `3dParty` 后的数字给出。
 - **AC 2.2**（`grep "AI助手" == 0`）—— 该字符串在 `web-apps` 中**从未出现**，
-  裁剪前后都是 0，因此该判据不度量任何东西。AI 助手在上游是**插件**而非内置 UI，
+  裁剪前后都是 0，因此不度量任何东西。AI 助手在上游是**插件**而非内置 UI，
   实质裁剪通过禁用插件宿主完成，并已隐藏 4/4 编辑器的协作页签。
+- **AC 3.4**（日志出现 `CRDT` 或 `change set applied`）—— ONLYOFFICE 用的是
+  **Operational Transformation**，不是 CRDT；`change set applied` 在 core/sdkjs
+  中出现 0 次，`CRDT` 的命中全部是测试夹具里的 base64 片段。等价行为已实测通过：
+  两个真实编辑器会话并发编辑同一文档，双方各自收到对方的 `saveChanges` 变更集，
+  光标双向同步，且无 `onError`。
 
-### 13 项 BLOCKED 的三个根因
+### 9 项 BLOCKED 的两个根因
 
-1. **无法执行上游构建** —— `automate.py` 的第一步就要下载
-   `ONLYOFFICE-data/build_tools_data` 中的引导 python3 与预编译 Qt 5.9.9，
-   这两个 raw URL 在本会话的出网策略下返回 **HTTP 403**；
-   该仓库的 git LFS 对象也不在匿名读取通道提供（拿到的是 133 字节指针）。
+1. **构建卡在 v8** —— `core/DesktopEditor/doctrenderer` 需要一个 JS 引擎；
+   Linux 下唯一替代 `use_javascript_core` 只链接 Apple 框架与 Objective-C 源码，
+   仅限 macOS/iOS。构建 v8 需要 `depot_tools` + `gclient`，其来源
+   `chromium.googlesource.com` 与 CIPD 服务均被本会话出网策略拒绝。
+   其余依赖**已全部解决**：boost、CEF、ICU、OpenSSL 均已成功构建；
+   引导 python3 与 CEF 通过 git 通道取得（见 `scripts/fetch_prebuilts.sh`），
+   Qt 改用系统 5.15.13（上游自带的 `use_system_qt.py` 路径）。
    影响 AC 1.3、1.4、2.4、4.3、4.4、4.5、5.2、5.3。
    诊断：`scripts/build_desktop.sh --check-only`
-2. **无法拉取容器镜像** —— Docker Hub 的 blob CDN
-   `production.cloudfront.docker.com:443` 被出网策略拒绝（403）。
-   编排文件本身已通过 `docker compose config` 校验。
-   影响 AC 3.1、3.3、3.4、3.5。证据：`baseline/egress_denials.json`
-3. **跨平台打包需要各自宿主** —— `.exe` 需 Windows + MSVC/Inno Setup，
-   `.dmg` 需 macOS + Xcode/codesign，在 Linux 容器中无法产出。
-   影响 AC 5.1。
+2. **跨平台打包需要各自宿主** —— `.exe` 需 Windows + MSVC/Inno Setup，
+   `.dmg` 需 macOS + Xcode/codesign，在 Linux 容器中无法产出。影响 AC 5.1。
 
-上述每一项的测试与打包脚本都已写好并通过语法校验，
-在具备条件的环境（可访问上游构建产物 + 可拉取镜像 + CI 三平台矩阵）中可直接执行。
+> 另注：AC 4.4/4.5 是**相对基线**的判据，需要两次构建（未优化基线 + 优化版）
+> 才能比较，仅有一个产物无法评估。
 
 ## 与上游的差异
 
