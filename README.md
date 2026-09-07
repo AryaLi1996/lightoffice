@@ -22,6 +22,8 @@ scripts/package.sh                # 产出安装包 + checksums
 scripts/verify_ac.sh              # 逐条核对 25 项验收标准
 
 # 内网协作栈与协同测试
+scripts/gen_env.sh                        # 生成随机凭据（compose 无凭据不启动）
+scripts/gen_tls_cert.sh                   # 生成自签证书（生产请换成企业 CA 签发）
 docker compose -f deploy/docker-compose.nextcloud.yml up -d
 node tests/fixture_server.js &            # 供 Document Server 取文档与回调
 node tests/coedit_browser.js              # 两个真实编辑器会话并发协同 (AC 3.3/3.4)
@@ -77,7 +79,12 @@ compose 默认值、provider 配置、客户端默认值与部署文档**五处*
 服务端可用 `deploy/docker-compose.nextcloud.yml` 部署到任意主机，
 或用 `deploy/aws/lightoffice-stack.yaml` 在 AWS 上建一台固定私有地址的主机。
 
+**传输安全**：栈仅通过 TLS 提供服务。WebDAV 使用 Basic 认证，明文部署会把
+口令与文档内容一起放到内网线路上。`scripts/gen_tls_cert.sh` 生成的是自签证书，
+仅适用于实验环境；生产部署请换成企业 CA 为同一地址签发的证书。
+
 **关键约束**：客户端的默认门户地址是**编译期烘焙**的，不是安装时配置的。
+协议也一样——`https://` 是烘焙进去的，事后改成 TLS 同样要重新构建并分发客户端。
 因此服务端地址必须在**构建客户端之前**确定；CloudFormation 用
 `PrivateIpAddress` 把实例钉死在该地址上，`npm test` 会校验
 CFN 参数、compose 默认值、provider 配置、客户端默认值、部署文档五处是否一致。
@@ -140,7 +147,8 @@ CFN 参数、compose 默认值、provider 配置、客户端默认值、部署�
 | 主题 | 新增 `轻量版WPS主题`（90 个颜色键，浅色，按文档类型着色） |
 | 菜单 | 隐藏 4 个编辑器的协作页签；禁用插件宿主（连带移除 AI 助手） |
 | 品牌 | 启动画面、窗口图标、About logo、二进制版权串全部替换 |
-| 云存储 | 新增内网 provider，默认地址 `http://10.0.7.10:8080` |
+| 云存储 | 新增内网 provider，默认地址 `https://10.0.7.10`（仅 TLS） |
+| 传输安全 | nginx 终结 TLS（:443 门户 / :8443 Document Server）；后端不发布任何明文端口 |
 | 词典 | 48 个语种裁剪至 1 个（上游无 zh_CN 词典） |
 | 体积 | `-Os`、`--gc-sections`、链接期 strip |
 

@@ -7,8 +7,8 @@
 
 | 组件 | 地址 | 说明 |
 |---|---|---|
-| Nextcloud（私有存储） | `http://10.0.7.10:8080` | 桌面客户端默认连接地址 |
-| ONLYOFFICE Document Server（协同编辑） | `http://10.0.7.20` | 提供实时协同与冲突合并 |
+| Nextcloud（私有存储） | `https://10.0.7.10` | 桌面客户端默认连接地址（经 nginx 终结 TLS） |
+| ONLYOFFICE Document Server（协同编辑） | `https://10.0.7.10:8443` | 提供实时协同与冲突合并 |
 | MariaDB | `10.0.7.30:3306` | 仅内网可见，不对外发布端口 |
 | 内网网段 | `10.0.7.0/24` | Docker bridge `lightoffice-intranet` |
 
@@ -31,16 +31,24 @@ ip route | grep -q '10\.0\.7\.' && echo "网段冲突，请修改 compose 中的
 
 不要使用编排文件中的默认口令。创建 `.env`（与 compose 文件同目录）：
 
+编排文件把凭据声明为 `${VAR:?...}`：**没有 `.env` 就不会启动**。
+这是刻意的——此前的 `${VAR:-默认值}` 意味着忘记配置的部署照样跑起来，
+用的却是本仓库里公开的口令。
+
 ```bash
-cat > deploy/.env <<'EOF'
-DB_ROOT_PASSWORD=change-me-root
-DB_PASSWORD=change-me-db
-NEXTCLOUD_ADMIN_USER=lightadmin
-NEXTCLOUD_ADMIN_PASSWORD=change-me-admin
-DOCSERVER_JWT_SECRET=change-me-jwt
-EOF
-chmod 600 deploy/.env
+scripts/gen_env.sh          # 随机生成，重复运行会保留已有值
+scripts/gen_env.sh --print  # 需要查看时
 ```
+
+TLS 证书同样是启动前提：
+
+```bash
+scripts/gen_tls_cert.sh --host 10.0.7.10 --dns office.lightoffice.internal
+```
+
+> 自签证书只适用于实验环境：每台客户端都要被告知信任它，而这与信任攻击者的证书
+> 无从区分。生产部署请用企业 CA 为**同一地址**签发证书替换
+> `deploy/tls/{fullchain,privkey}.pem`，并通过既有渠道分发该 CA。
 
 ## 3. 启动协作栈
 
@@ -62,18 +70,18 @@ until [ "$(docker inspect -f '{{.State.Health.Status}}' lightoffice-documentserv
 ## 5. 验证可达性
 
 ```bash
-curl -sS -o /dev/null -w 'nextcloud status.php -> %{http_code}\n' http://10.0.7.10:8080/status.php
-curl -sS -o /dev/null -w 'documentserver healthcheck -> %{http_code}\n' http://10.0.7.20/healthcheck
-curl -sS http://10.0.7.10:8080/status.php | python3 -m json.tool
+curl -sS --cacert deploy/tls/fullchain.pem -o /dev/null -w 'nextcloud status.php -> %{http_code}\n' https://10.0.7.10/status.php
+curl -sS --cacert deploy/tls/fullchain.pem -o /dev/null -w 'documentserver healthcheck -> %{http_code}\n' https://10.0.7.10:8443/healthcheck
+curl -sS --cacert deploy/tls/fullchain.pem https://10.0.7.10/status.php | python3 -m json.tool
 ```
 
 ## 6. 安装并连接 ONLYOFFICE Nextcloud 应用
 
 ```bash
 docker exec -u www-data lightoffice-nextcloud php occ app:install onlyoffice
-docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="http://10.0.7.20/"
-docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="http://10.0.7.20/"
-docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice StorageUrl --value="http://10.0.7.10:8080/"
+docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerUrl --value="https://10.0.7.10:8443/"
+docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice DocumentServerInternalUrl --value="https://10.0.7.10:8443/"
+docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice StorageUrl --value="https://10.0.7.10/"
 docker exec -u www-data lightoffice-nextcloud php occ config:app:set onlyoffice jwt_secret --value="$(grep DOCSERVER_JWT_SECRET deploy/.env | cut -d= -f2)"
 ```
 
