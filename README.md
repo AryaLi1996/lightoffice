@@ -61,10 +61,29 @@ scripts/verify_ac.sh
 | `code_index.json` | 所有定制点的路径索引，由 `gen_code_index.py` 生成并校验存在性 |
 | `overlay/` | 注入上游树的文件（主题、品牌资源、`version_p.h`、内网云 provider、编译配置） |
 | `scripts/` | bootstrap / overlay / 优化 / 打包 / 验收脚本 |
-| `deploy/` | 内网 Nextcloud + ONLYOFFICE Document Server 编排（`10.0.7.0/24`） |
+| `deploy/` | 内网协作栈编排 + `aws/` 下的 CloudFormation（固定私有地址主机） |
 | `tests/` | CDP 冒烟测试、并发协同测试、冷启动/内存基准 |
 | `docs/` | 用户指南、部署指南、开发者指南 |
 | `baseline/` | 各项基线数据与 `verify_ac.sh` 的 JSON 报告 |
+
+## 部署形态
+
+| 场景 | 需要什么 |
+|---|---|
+| 单机离线办公 | **只要安装包**。桌面编辑器本身完全离线可用，无需任何服务端。 |
+| 内网协同编辑 | 安装包 **+** 服务端（Nextcloud + Document Server + MariaDB）。合并算法在 Document Server，不在客户端。 |
+
+服务端可用 `deploy/docker-compose.nextcloud.yml` 部署到任意主机，
+或用 `deploy/aws/lightoffice-stack.yaml` 在 AWS 上建一台固定私有地址的主机。
+
+**关键约束**：客户端的默认门户地址是**编译期烘焙**的，不是安装时配置的。
+因此服务端地址必须在**构建客户端之前**确定；CloudFormation 用
+`PrivateIpAddress` 把实例钉死在该地址上，`npm test` 会校验
+CFN 参数、compose 默认值、provider 配置、客户端默认值、部署文档五处是否一致。
+
+另一处易错点：容器网桥地址（`172.28.7.0/24`）**客户端永远不可达**，
+客户端只能走主机发布的端口（`:8080` / `:8081`）。测试会专门拦截
+「把网桥地址写进客户端配置」这类错误。
 
 ## 验收状态
 

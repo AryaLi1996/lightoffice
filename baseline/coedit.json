@@ -1,6 +1,6 @@
 {
-  "generated": "2026-09-07T06:24:30.606Z",
-  "documentKey": "lo-coedit-1788762242885",
+  "generated": "2026-09-07T12:00:01.511Z",
+  "documentKey": "lo-coedit-1788782372124",
   "sessions": {
     "Alice": {
       "events": [
@@ -9,9 +9,9 @@
       ],
       "websockets": [
         {
-          "url": "ws://10.0.7.20/9.4.0-3d837c7ba13da7ff2e00ea3871a7c401/doc/lo-coedit-1788762242885/c/?shardkey=lo-coedit-1788762242885&EIO=4&transport=websocket",
+          "url": "ws://localhost:8081/9.4.0-51461fe3060a82194bbf9a295c6c8ab7/doc/lo-coedit-1788782372124/c/?shardkey=lo-coedit-1788782372124&EIO=4&transport=websocket",
           "sent": 33,
-          "received": 35,
+          "received": 34,
           "sentTypes": [
             "auth",
             "clientLog",
@@ -42,7 +42,7 @@
       ],
       "websockets": [
         {
-          "url": "ws://10.0.7.20/9.4.0-3d837c7ba13da7ff2e00ea3871a7c401/doc/lo-coedit-1788762242885/c/?shardkey=lo-coedit-1788762242885&EIO=4&transport=websocket",
+          "url": "ws://localhost:8081/9.4.0-51461fe3060a82194bbf9a295c6c8ab7/doc/lo-coedit-1788782372124/c/?shardkey=lo-coedit-1788782372124&EIO=4&transport=websocket",
           "sent": 33,
           "received": 34,
           "sentTypes": [

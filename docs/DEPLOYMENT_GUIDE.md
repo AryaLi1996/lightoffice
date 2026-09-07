@@ -128,6 +128,71 @@ docker exec -u www-data lightoffice-nextcloud php occ log:tail -n 50
 
 ---
 
+## AWS 部署（CloudFormation）
+
+`deploy/aws/lightoffice-stack.yaml` 建立一台**固定私有地址**的协作主机。
+
+### 为什么必须是固定地址
+
+桌面客户端的默认门户地址是**编译期写进二进制的**，不是安装时配置的。
+地址一旦变化，就要重新构建并重新分发**每一台**客户端。
+所以该模板把实例钉在 `HostPrivateIp`（默认 `10.0.7.10`）——正是客户端里已经烘焙的地址。
+
+### 两套地址空间（不要混淆）
+
+| 用途 | 地址 | 谁能访问 |
+|---|---|---|
+| 客户端 → Nextcloud | `http://10.0.7.10:8080` | 企业内网（经 VPN / TGW / 对等连接） |
+| 客户端 → Document Server | `http://10.0.7.10:8081` | 同上 |
+| 容器之间 | `172.28.7.0/24` | **仅主机内部**，客户端永远不可达 |
+
+容器网桥刻意**不用** `10.0.7.0/24`：在 AWS 主机上该网段属于 VPC 子网，
+网桥若与之重叠会让主机对自己的地址产生双重路由，把流量打进黑洞。
+`tests/unit/consistency.test.js` 会检测这种重叠并让构建失败。
+
+### 部署
+
+```bash
+aws cloudformation deploy \
+  --template-file deploy/aws/lightoffice-stack.yaml \
+  --stack-name lightoffice-prod \
+  --parameter-overrides CorporateCidr=10.50.0.0/16 AttachVpnGateway=yes \
+  --capabilities CAPABILITY_IAM \
+  --region ap-east-1
+aws cloudformation describe-stacks --stack-name lightoffice-prod \
+  --query 'Stacks[0].Outputs' --output table
+```
+
+`CorporateCidr` 是唯一必填参数，且被约束为 RFC1918——该主机存放公司文档，
+安全组只对这个网段开放 8080/8081，实例位于私有子网且无公网地址。
+
+### 管理与运维
+
+主机通过 SSM Session Manager 访问，无需 SSH 密钥、无需堡垒机：
+
+```bash
+aws ssm start-session --target "$(aws cloudformation describe-stacks --stack-name lightoffice-prod --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue" --output text)"
+aws secretsmanager get-secret-value --secret-id lightoffice-prod/app --query SecretString --output text | jq .
+```
+
+凭据由 Secrets Manager 生成并在首次启动时补全后写回，
+因此重建主机会复用同一套密钥——Document Server 的 JWT 两端必须一致，这点尤其重要。
+
+文档与数据库放在**加密的 EBS 卷**上，其 `DeletionPolicy: Snapshot`：
+删除 stack 不会静默销毁公司文档。
+
+### 换成别的地址
+
+若贵司网段与默认值冲突，务必在**构建客户端之前**改：
+
+```bash
+NEW_IP=192.168.30.10
+sed -i "s#10\.0\.7\.10#${NEW_IP}#g" overlay/desktop-apps/common/loginpage/src/lightoffice-cloud.js
+sed -i "s#10\.0\.7\.10#${NEW_IP}#g" overlay/desktop-apps/common/loginpage/providers/lightoffice/config.json
+sed -i "s#Default: 10\.0\.7\.10#Default: ${NEW_IP}#" deploy/aws/lightoffice-stack.yaml
+npm test    # 校验五处地址是否仍然一致
+```
+
 ## Kubernetes 部署（可选）
 
 如使用 K8s 而非 Compose：
