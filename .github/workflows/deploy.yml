@@ -1,0 +1,157 @@
+name: Deploy
+
+# Rolls the intranet collaboration stack out to a target host.
+#
+# Deployment is deliberately gated on a GitHub Environment: the stack holds
+# company documents, so a push to a branch must not be able to reach it without
+# whatever approvals and secrets that environment carries.
+#
+# Required secrets on the chosen environment:
+#   DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY   — where and how to connect
+#   DB_ROOT_PASSWORD, DB_PASSWORD              — MariaDB credentials
+#   NEXTCLOUD_ADMIN_USER, NEXTCLOUD_ADMIN_PASSWORD
+#   DOCSERVER_JWT_SECRET                       — must match on both sides
+#
+# validate-only runs need none of them, which is what makes this workflow
+# useful on a pull request.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [staging, production]
+        default: staging
+      mode:
+        description: "validate = check the compose file only; deploy = roll it out"
+        type: choice
+        options: [validate, deploy]
+        default: validate
+  pull_request:
+    paths:
+      - "deploy/**"
+      - ".github/workflows/deploy.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two rollouts touch the same host at once.
+  group: deploy-${{ github.event.inputs.environment || 'validate' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate compose definition
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci --omit=optional
+
+      - name: Compose file is schema-valid
+        run: docker compose -f deploy/docker-compose.nextcloud.yml config >/dev/null
+
+      - name: Addresses agree, and no credential is a hardcoded literal
+        # consistency.test.js asserts both: that the intranet address matches
+        # across compose, the provider config, the client defaults and the
+        # deployment guide, and that every credential is a ${VAR:-default}
+        # substitution. A grep cannot do the second reliably — "PASSWORD:"
+        # followed by the "-default" of ${VAR:-default} looks exactly like a
+        # hardcoded value to a regex.
+        run: node --test "tests/unit/consistency.test.js"
+
+  deploy:
+    name: Deploy to ${{ github.event.inputs.environment }}
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'deploy'
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ship the compose file and environment
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_: ${{ secrets.DEPLOY_USER }}
+        run: |
+          umask 077
+          cat > deploy/.env <<EOF
+          DB_ROOT_PASSWORD=${{ secrets.DB_ROOT_PASSWORD }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+          NEXTCLOUD_ADMIN_USER=${{ secrets.NEXTCLOUD_ADMIN_USER }}
+          NEXTCLOUD_ADMIN_PASSWORD=${{ secrets.NEXTCLOUD_ADMIN_PASSWORD }}
+          DOCSERVER_JWT_SECRET=${{ secrets.DOCSERVER_JWT_SECRET }}
+          EOF
+          ssh "$USER_@$HOST" 'mkdir -p ~/lightoffice/deploy'
+          scp deploy/docker-compose.nextcloud.yml deploy/.env \
+              "$USER_@$HOST:~/lightoffice/deploy/"
+          rm -f deploy/.env
+
+      - name: Pull images and roll out
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh "$USER_@$HOST" bash -seu <<'REMOTE'
+          cd ~/lightoffice
+          docker compose -f deploy/docker-compose.nextcloud.yml pull
+          docker compose -f deploy/docker-compose.nextcloud.yml up -d --remove-orphans
+          REMOTE
+
+      - name: Wait for health and verify
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_: ${{ secrets.DEPLOY_USER }}
+        run: |
+          ssh "$USER_@$HOST" bash -seu <<'REMOTE'
+          wait_healthy() {
+            local name="$1" tries="$2" i=0
+            until [ "$(docker inspect -f '{{.State.Health.Status}}' "$name" 2>/dev/null)" = healthy ]; do
+              i=$((i+1))
+              if [ "$i" -ge "$tries" ]; then
+                echo "$name never became healthy" >&2
+                docker logs --tail 80 "$name" >&2 || true
+                exit 1
+              fi
+              sleep 5
+            done
+            echo "$name healthy"
+          }
+          wait_healthy lightoffice-db 60
+          wait_healthy lightoffice-nextcloud 120
+          wait_healthy lightoffice-documentserver 180
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -I http://10.0.7.10:8080/status.php)
+          echo "status.php -> HTTP $code"
+          [ "$code" = "200" ]
+          REMOTE
+
+      - name: Roll back on failure
+        if: failure()
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          USER_: ${{ secrets.DEPLOY_USER }}
+        run: |
+          echo "::warning::deployment failed; stopping the stack rather than leaving it half-up"
+          ssh "$USER_@$HOST" \
+            'cd ~/lightoffice && docker compose -f deploy/docker-compose.nextcloud.yml down' || true
+
+      - name: Remove deploy credentials from the runner
+        if: always()
+        run: rm -f ~/.ssh/id_ed25519 deploy/.env

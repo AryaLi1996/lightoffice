@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${1:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
+SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 MARK="LIGHTOFFICE-SIZE-OPT"
 DEFAULTS="$SRC/desktop-apps/win-linux/defaults.pri"
 

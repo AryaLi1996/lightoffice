@@ -23,7 +23,7 @@
 
 set -euo pipefail
 
-SRC="${1:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
+SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 DATA_REPO="https://github.com/ONLYOFFICE-data/build_tools_data"
 WORK="${LIGHTOFFICE_PREBUILT_CACHE:-/tmp/lightoffice-prebuilts}"

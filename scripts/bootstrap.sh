@@ -11,8 +11,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${1:-${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}}"
-BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-/home/user/build_tools}"
+SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
+BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 
 UPSTREAM=https://github.com/ONLYOFFICE/DesktopEditors.git
 TOOLS=https://github.com/ONLYOFFICE/build_tools.git

@@ -12,12 +12,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${LIGHTOFFICE_SRC:-/home/user/onlyoffice-src}"
+SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 CHECK_ONLY=0
 [ "${1:-}" = "--check-only" ] && CHECK_ONLY=1
-
-DATA_BASE="https://github.com/ONLYOFFICE-data/build_tools_data/raw/refs/heads/master"
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }

@@ -1,0 +1,118 @@
+name: CI
+
+# Sanity checks for the overlay itself. This repository holds no ONLYOFFICE
+# source — only the overlay, the scripts that apply it and the acceptance
+# runner — so CI validates those, and criteria that need the ~3GB upstream
+# checkout report SKIPPED rather than failing the build.
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install PyYAML for workflow and compose validation
+        run: pip install --quiet pyyaml
+
+      - name: Run lint
+        run: scripts/lint.sh
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        # Playwright is an optionalDependency used only by the integration
+        # workflow; skip its browser download here.
+        run: npm ci --omit=optional
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Run unit tests
+        run: npm test
+
+  branding-reproducible:
+    name: Branding assets are reproducible
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pillow and the fonts the generator requires
+        # gen_branding.py now fails rather than substituting a fallback face,
+        # so the exact fonts have to be present for the output to match.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core fonts-wqy-zenhei
+          pip install --quiet pillow
+
+      - name: Regenerate branding and diff against what is committed
+        # gen_branding.py is declared deterministic. If a regeneration differs
+        # from the committed PNGs, either the generator drifted or someone
+        # hand-edited an asset — both are worth failing on, because AC 2.3
+        # pins the splash checksum.
+        run: |
+          python3 scripts/gen_branding.py
+          if ! git diff --quiet -- overlay/branding; then
+            echo "::error::regenerating branding produced different bytes"
+            git diff --stat -- overlay/branding
+            exit 1
+          fi
+          echo "branding assets reproduce byte-for-byte"
+
+  acceptance:
+    name: Acceptance criteria (repo-only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and ImageMagick
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq imagemagick
+
+      - name: Run the acceptance runner without an upstream checkout
+        # Criteria needing the ONLYOFFICE tree or a running stack report
+        # SKIPPED/BLOCKED. The gate is that nothing reports FAIL.
+        run: |
+          set -o pipefail
+          LIGHTOFFICE_SRC=/nonexistent scripts/verify_ac.sh --json ac_report.json | tee ac.log
+          fails=$(jq -r '.summary.fail' ac_report.json)
+          echo "### Acceptance criteria" >> "$GITHUB_STEP_SUMMARY"
+          jq -r '"| " + .id + " | " + .verdict + " | " + .criterion + " |"' ac_report.json \
+            | sed '1i | AC | Verdict | Criterion |\n|---|---|---|' >> "$GITHUB_STEP_SUMMARY"
+          if [ "$fails" -ne 0 ]; then
+            echo "::error::$fails acceptance criteria failed"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-report
+          path: |
+            ac_report.json
+            ac.log
