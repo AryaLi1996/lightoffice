@@ -135,6 +135,73 @@ else
   fi
 fi
 
+# --- depot_tools, pinned, and the marker that stops upstream deleting it ------
+# v8_89.py clones depot_tools from HEAD, unpinned. That dependency moved: the
+# same code path fetched v8 successfully on 2026-09-07 and has failed on every
+# run since, because current HEAD cannot bootstrap its CIPD client. Pinning it
+# is the whole point of a reproducible build — an unpinned HEAD dependency is a
+# build that works until someone else's Tuesday.
+#
+# Staging it here only works if the marker below is written too. v8_89.py calls
+#
+#     base.common_check_version("v8", "1", clean)
+#
+# and base.py does an EXACT string compare of ./v8.data against "v8_version_1",
+# calling clean() — which deletes depot_tools, v8, .gclient and
+# .gclient_entries — on any mismatch, including a missing file. An earlier
+# attempt staged depot_tools without the marker and watched upstream delete it;
+# the log line was "delete warning [folder not exist]: depot_tools". readFile
+# and writeFile are byte-exact, so the marker must carry NO trailing newline.
+V8_BASE="$SRC/core/Common/3dParty/v8_89"
+DEPOT_TOOLS="$V8_BASE/depot_tools"
+V8_MARKER="$V8_BASE/v8.data"
+DEPOT_TOOLS_URL="https://chromium.googlesource.com/chromium/tools/depot_tools.git"
+# Anchored on evidence rather than a guessed SHA: pin to the last revision from
+# before the day the fetch was last known to work. Override to move the pin.
+PIN_BEFORE="${LIGHTOFFICE_DEPOT_TOOLS_BEFORE:-2026-09-07}"
+
+write_v8_marker() {
+  # Byte-exact, no newline — see above.
+  printf '%s' 'v8_version_1' > "$V8_MARKER"
+}
+
+if [ -d "$DEPOT_TOOLS/.git" ]; then
+  ok "depot_tools already staged ($(git -C "$DEPOT_TOOLS" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+  write_v8_marker
+  ok "v8.data marker written — upstream will keep the staged checkout"
+elif ! git ls-remote --exit-code "$DEPOT_TOOLS_URL" HEAD >/dev/null 2>&1; then
+  warn "depot_tools is unreachable from here; upstream will clone HEAD during the build, which currently cannot bootstrap"
+else
+  mkdir -p "$V8_BASE"
+  if git clone --quiet "$DEPOT_TOOLS_URL" "$DEPOT_TOOLS"; then
+    pin="$(git -C "$DEPOT_TOOLS" rev-list -1 --before="$PIN_BEFORE" HEAD 2>/dev/null || true)"
+    if [ -n "$pin" ]; then
+      git -C "$DEPOT_TOOLS" checkout --quiet --detach "$pin"
+      ok "depot_tools pinned to ${pin:0:12} (last revision before $PIN_BEFORE)"
+    else
+      warn "no depot_tools revision found before $PIN_BEFORE; staying on HEAD"
+    fi
+
+    # Provision depot_tools' Python now, while the network and a normal
+    # environment are available. Doing it here is what lets the build disable
+    # depot_tools' self-update without losing the bootstrap: a previous attempt
+    # set DEPOT_TOOLS_UPDATE=0 alone and the build died on
+    # "python3_bin_reldir.txt not found".
+    if [ -x "$DEPOT_TOOLS/ensure_bootstrap" ]; then
+      if ( cd "$DEPOT_TOOLS" && DEPOT_TOOLS_UPDATE=0 ./ensure_bootstrap >/dev/null 2>&1 ); then
+        ok "depot_tools bootstrapped ($( [ -f "$DEPOT_TOOLS/python3_bin_reldir.txt" ] && echo 'python3 provisioned' || echo 'no python3_bin_reldir.txt' ))"
+      else
+        warn "ensure_bootstrap failed; the v8 fetch may not run"
+      fi
+    fi
+
+    write_v8_marker
+    ok "v8.data marker written — upstream will keep the staged checkout"
+  else
+    warn "depot_tools clone failed; upstream will try its own during the build"
+  fi
+fi
+
 # deps.py runs a long apt-get list; skip it when the packages are already there.
 touch "$BUILD_TOOLS/tools/linux/packages_complete"
 
