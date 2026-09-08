@@ -48,6 +48,22 @@ echo "Preflight checks"
 
 fatal=0
 
+# 0. Platform. This wrapper drives build_tools/tools/linux/*, and the prebuilts
+#    it checks for are Linux binaries. Every check below is a file-existence
+#    test on a linux-named path, and fetch_prebuilts.sh creates those paths on
+#    any host — so without this guard the preflight passes on macOS and the
+#    build then tries to exec a Linux ELF ("cannot execute binary file",
+#    exit 126). Fail here instead, with the reason, so the caller can route to
+#    its skipped-build path.
+if [ "$(uname -s)" != "Linux" ]; then
+  bad "$(uname -s) is not supported by this script — it drives the Linux build (tools/linux/automate.py) with Linux prebuilts"
+  echo
+  echo "Preflight FAILED — nothing was built." >&2
+  echo "Building .dmg/.exe needs the native recipes: desktop-apps/macos (Xcode)" >&2
+  echo "and desktop-apps/win-linux/package/windows (MSVC + Inno Setup)." >&2
+  exit 2
+fi
+
 # 1. build_tools present, laid out as a sibling of core/ etc.
 if [ -d "$BUILD_TOOLS/tools/linux" ]; then
   ok "build_tools present ($BUILD_TOOLS)"
@@ -73,8 +89,21 @@ fi
 # 3. Qt. The prebuilt Qt 5.9.9 in build_tools_data IS LFS-tracked and therefore
 #    unavailable on an anonymous git lane — but upstream ships use_system_qt.py
 #    for exactly this case, and the distro Qt5 works.
-if [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ] || [ -d "$BUILD_TOOLS/tools/linux/qt_build" ]; then
-  ok "Qt available ($( [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ] && echo system Qt || echo prebuilt Qt ))"
+qt_versioned=""
+for cand in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*; do
+  [ -d "$cand/gcc_64" ] && { qt_versioned="$cand"; break; }
+done
+if [ -n "$qt_versioned" ]; then
+  ok "Qt available ($(basename "$qt_versioned"))"
+elif [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ]; then
+  # Usable only without the sysroot: with it, boost.py builds boost through
+  # qmake, which needs the version to be readable from the directory name.
+  if [ "$SYSROOT" = "1" ]; then
+    bad "only an unversioned system Qt is present; a sysroot build reads the version from the directory name — rerun scripts/fetch_prebuilts.sh to create the qt_build/Qt-<version> alias"
+    fatal=1
+  else
+    ok "Qt available (system Qt, unversioned — fine without the sysroot)"
+  fi
 else
   bad "no Qt — run: (cd $BUILD_TOOLS/tools/linux && python3 use_system_qt.py)"; fatal=1
 fi
@@ -140,8 +169,15 @@ echo
 echo
 echo "Running upstream build (this takes hours) ..."
 cd "$BUILD_TOOLS"
+# Prefer a versioned Qt directory. Upstream reads the Qt version out of this
+# path (base.py qt_version takes QT_DEPLOY.split("/")[-3] and keeps only digits
+# and dots), so a name like "system_qt" strips to "" and int("") raises. Any
+# qt_build/Qt-<version> works, including the alias fetch_prebuilts.sh makes for
+# the system Qt.
 QT_DIR="$BUILD_TOOLS/tools/linux/system_qt"
-[ -d "$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9" ] && QT_DIR="$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9"
+for cand in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*; do
+  [ -d "$cand/gcc_64" ] && { QT_DIR="$cand"; break; }
+done
 echo "sysroot: $SYSROOT"
 ./tools/linux/python3/bin/python3 ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"

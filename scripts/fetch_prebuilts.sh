@@ -23,6 +23,10 @@
 
 set -euo pipefail
 
+# ROOT was referenced in the SRC default without ever being set. Under `set -u`
+# that aborts the script — but only when neither an argument nor
+# LIGHTOFFICE_SRC is given, which is why CI never hit it.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 DATA_REPO="https://github.com/ONLYOFFICE-data/build_tools_data"
@@ -34,6 +38,7 @@ CEF_BRANCH="${CEF_BRANCH:-5414}"
 CEF_PLATFORM="${CEF_PLATFORM:-linux_64}"
 
 ok() { printf '  \033[32m✓\033[0m %s\n' "$*"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*" >&2; }
 
 [ -d "$BUILD_TOOLS/tools/linux" ] || { echo "build_tools not found at $BUILD_TOOLS" >&2; exit 1; }
 
@@ -99,6 +104,35 @@ if [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ]; then
 else
   ( cd "$BUILD_TOOLS/tools/linux" && python3 use_system_qt.py )
   ok "system Qt linked ($(qmake -query QT_VERSION 2>/dev/null || echo '?'))"
+fi
+
+# --- versioned alias for the system Qt ---------------------------------------
+# use_system_qt.py produces tools/linux/system_qt/gcc_64, and that directory name
+# is the problem: upstream reads the Qt version out of the PATH rather than from
+# qmake. base.py does
+#
+#     qt_version()  ->  QT_DEPLOY.split("/")[-3], keeping only digits and dots
+#
+# so with --qt-dir .../system_qt the third-from-last component is "system_qt",
+# which strips to the empty string and int("") raises. The failure only appears
+# on the sysroot build path, because boost.py builds boost with plain b2 when
+# sysroot is empty and via qmake when it is not — and we need sysroot for v8.
+#
+# So give the system Qt a directory whose NAME carries the version, in the
+# layout upstream already expects for a prebuilt Qt. It is a symlink, not a
+# copy: one name, no duplicated toolchain.
+QT_VER="$(qmake -query QT_VERSION 2>/dev/null || qmake-qt5 -query QT_VERSION 2>/dev/null || true)"
+if [ -z "$QT_VER" ]; then
+  warn "qmake did not report a Qt version; skipping the versioned alias. A sysroot build will fail in base.py qt_version()."
+else
+  QT_ALIAS="$BUILD_TOOLS/tools/linux/qt_build/Qt-$QT_VER"
+  if [ -d "$QT_ALIAS/gcc_64" ]; then
+    ok "versioned Qt alias present (Qt-$QT_VER)"
+  else
+    mkdir -p "$QT_ALIAS"
+    ln -sfn "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" "$QT_ALIAS/gcc_64"
+    ok "versioned Qt alias created: qt_build/Qt-$QT_VER/gcc_64 -> system_qt/gcc_64"
+  fi
 fi
 
 # deps.py runs a long apt-get list; skip it when the packages are already there.
