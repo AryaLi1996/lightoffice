@@ -257,6 +257,45 @@ patch_v8_for_cstdint() {
   [ "$patched" -gt 0 ]
 }
 
+# v8 ships its own clang, and that toolchain ships its own libstdc++.so.6. On
+# Ubuntu 24.04 the link also pulls in the host's system ICU, which needs a
+# newer one than the bundled copy provides:
+#
+#     [496/2929] LINK ./torque
+#     ld.lld: .../llvm-build/Release+Asserts/lib/libstdc++.so.6:
+#       version `GLIBCXX_3.4.30' not found
+#       (required by /lib/x86_64-linux-gnu/libicuuc.so.74)
+#
+# Upstream already has this exact remedy — v8_89.py fix_ubuntu24() moves the
+# bundled library aside and symlinks the host's in its place — but it is
+# unreachable here, because the function returns early when sysroot is "",
+# which is what --sysroot 0 normalises to. Apply upstream's fix rather than
+# invent a different one.
+V8_LLVM_LIB="$SRC/core/Common/3dParty/v8_89/v8/third_party/llvm-build/Release+Asserts/lib"
+HOST_LIBSTDCXX="/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
+
+fix_v8_bundled_libstdcxx() {
+  local bundled="$V8_LLVM_LIB/libstdc++.so.6"
+  [ -e "$bundled" ] || return 1
+  # A symlink here is our own earlier work: already done, nothing changed.
+  [ -L "$bundled" ] && return 1
+  [ -e "$HOST_LIBSTDCXX" ] || return 1
+  mv "$bundled" "$bundled.old"
+  ln -s "$HOST_LIBSTDCXX" "$bundled"
+  echo "  replaced v8's bundled libstdc++.so.6 with the host's (upstream fix_ubuntu24)"
+  return 0
+}
+
+# Each remedy reports whether it actually changed anything, so the build is
+# retried only while at least one did. An unrelated failure is never retried,
+# and the loop is bounded by the remedies running out.
+apply_v8_remedies() {
+  local changed=0
+  if patch_v8_for_cstdint; then changed=1; fi
+  if fix_v8_bundled_libstdcxx; then changed=1; fi
+  [ "$changed" -eq 1 ]
+}
+
 # `set -e` is on, so a bare `make.py` followed by `rc=$?` never reaches the
 # retry: the failing command aborts the script first, and everything below it
 # — including the patch above — is dead code. That is exactly what happened on
@@ -272,17 +311,25 @@ run_make() {
   return "$status"
 }
 
+# Remedies surface one failure at a time — the <cstdint> errors hid the link
+# error behind them — so retry while each new failure yields a fix, rather than
+# exactly once. max_attempts is a backstop; the real bound is that every remedy
+# reports "no change" the second time it is asked.
 rc=0
 run_make || rc=$?
 
-if [ "$rc" -ne 0 ]; then
-  if patch_v8_for_cstdint; then
-    echo
-    echo "make.py failed; patched v8 headers under src/base for <cstdint> — retrying."
-    rc=0
-    run_make || rc=$?
+attempt=1
+max_attempts=4
+while [ "$rc" -ne 0 ] && [ "$attempt" -lt "$max_attempts" ]; do
+  if ! apply_v8_remedies; then
+    break
   fi
-fi
+  attempt=$((attempt + 1))
+  echo
+  echo "make.py failed; applied the v8 remedies above — retrying (attempt $attempt/$max_attempts)."
+  rc=0
+  run_make || rc=$?
+done
 
 BIN="$(find "$SRC/desktop-apps" "$SRC/../out" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)"
 echo
