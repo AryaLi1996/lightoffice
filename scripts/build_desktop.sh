@@ -221,18 +221,40 @@ fi
 # make.py, and if it fails with v8 present but unpatched, apply the one-line
 # include it needs and run once more. The second pass skips everything already
 # built, so it goes almost straight back to v8.
-V8_MACROS="$SRC/core/Common/3dParty/v8_89/v8/src/base/macros.h"
+V8_BASE_DIR="$SRC/core/Common/3dParty/v8_89/v8/src/base"
 
+# This v8 predates libstdc++ tightening its transitive includes: several headers
+# under src/base use fixed-width types while including nothing that declares
+# them. Modern glibc/libc++ no longer supply them by accident.
+#
+# The first version of this patched only macros.h, on the reasoning that
+# macros.h includes logging.h at line 12 so one include covers both. That holds
+# only for translation units that reach logging.h THROUGH macros.h — and
+# src/base/logging.cc includes logging.h directly at line 5, so it still failed:
+#
+#     In file included from ../../src/base/logging.cc:5:
+#     ../../src/base/logging.h:176:34: error: use of undeclared identifier 'uint8_t'
+#
+# Fixing one named file per 20-minute CI cycle is not a strategy, so this is
+# mechanical instead: every header under src/base that USES one of these types
+# and does NOT already include a header declaring them gets the include. Both
+# conditions must hold, so it touches nothing that is already correct, and
+# <cstdint> is idempotent and self-guarding. It is deliberately scoped to
+# src/base, where every failure so far has been; widen it only if a failure
+# appears elsewhere.
 patch_v8_for_cstdint() {
-  # Only claims success when it actually changed something, so a failure for any
-  # other reason is never silently retried.
-  [ -f "$V8_MACROS" ] || return 1
-  grep -q '#include <cstdint>' "$V8_MACROS" && return 1
-  # This v8 predates libstdc++ tightening its transitive includes: macros.h uses
-  # intptr_t/uintptr_t but includes nothing that declares them.
-  sed -i '1i #include <cstdint>  // LIGHTOFFICE: intptr_t/uintptr_t are used below but never declared' \
-    "$V8_MACROS"
-  return 0
+  local patched=0 f
+  [ -d "$V8_BASE_DIR" ] || return 1
+  while IFS= read -r f; do
+    grep -qE '#include +<(cstdint|stdint\.h)>' "$f" && continue
+    grep -qE '\b(u?int(8|16|32|64)_t|u?intptr_t)\b' "$f" || continue
+    sed -i '1i #include <cstdint>  // LIGHTOFFICE: fixed-width types used below but never declared' "$f"
+    echo "  patched $(basename "$f")"
+    patched=$((patched + 1))
+  done < <(find "$V8_BASE_DIR" -name '*.h' | sort)
+  # Success only when something actually changed, so an unrelated failure is
+  # never silently retried and the retry cannot loop.
+  [ "$patched" -gt 0 ]
 }
 
 # `set -e` is on, so a bare `make.py` followed by `rc=$?` never reaches the
@@ -256,7 +278,7 @@ run_make || rc=$?
 if [ "$rc" -ne 0 ]; then
   if patch_v8_for_cstdint; then
     echo
-    echo "make.py failed; v8's src/base/macros.h was missing <cstdint>. Patched it — retrying."
+    echo "make.py failed; patched v8 headers under src/base for <cstdint> — retrying."
     rc=0
     run_make || rc=$?
   fi
