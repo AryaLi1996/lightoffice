@@ -127,6 +127,24 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" /opt/lightoffice
           docker rmi "$repo:$tag" >/dev/null 2>&1 || true
           echo "restored $(du -sh /opt/lightoffice/src | cut -f1) to /opt/lightoffice/src"
+
+          # Trust the image only as far as it can be checked. A restore that
+          # looks fine but is missing a path the build needs costs the whole
+          # build step before it says so: an image missing sdkjs/build/build.py
+          # got 23 minutes of restore and then 25 minutes of build before
+          # dying. Discard an incomplete tree and let bootstrap.sh do a clean
+          # clone instead — slower than a good image, far faster than failing.
+          incomplete=""
+          for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common \
+                   desktop-sdk desktop-apps/win-linux build_tools .git; do
+            [ -e "/opt/lightoffice/src/$p" ] || incomplete="$incomplete $p"
+          done
+          if [ -n "$incomplete" ]; then
+            echo "::warning::prebuilt tree is incomplete (missing:$incomplete) — discarding it and building from source"
+            sudo rm -rf /opt/lightoffice/src
+            echo "hit=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "prebuilt tree has every path the build needs"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
       - name: Bootstrap upstream sources

@@ -77,18 +77,35 @@ jobs:
       # An image that built but banked nothing is worse than no image: the
       # release workflow would pull several GB and then rebuild v8 anyway. Fail
       # here instead, where the cause is visible.
-      - name: Verify the image actually banked v8 and core
+      # An image that built but banked nothing is worse than no image: a release
+      # run pulls several GB and then rebuilds anyway, or dies part way in.
+      #
+      # The first version of this checked only libv8_monolith.a and core/'s
+      # libraries. Both are produced BEFORE sdkjs, and the Dockerfile tolerates
+      # a build failure on purpose (it is expected to stop in desktop-apps), so
+      # an image missing sdkjs passed verification, published, and cost a
+      # release run 23 minutes of restore before it died on
+      # "sdkjs/build/build.py: No such file or directory". Any MISSING line in
+      # the manifest now fails the publish.
+      - name: Verify the image actually banked what a build needs
         run: |
           manifest=$(docker run --rm "${{ steps.meta.outputs.ref }}" cat /etc/lightoffice-build-image)
           echo "$manifest"
+          fail=0
           case "$manifest" in
             *libv8_monolith.a*) echo "v8 present" ;;
-            *) echo "::error::image has no libv8_monolith.a — the v8 build did not complete"; exit 1 ;;
+            *) echo "::error::image has no libv8_monolith.a — the v8 build did not complete"; fail=1 ;;
           esac
           case "$manifest" in
-            *libkernel*|*kernel*) echo "core libraries present" ;;
-            *) echo "::error::image has no core/ libraries — the build stopped before core"; exit 1 ;;
+            *kernel*) echo "core libraries present" ;;
+            *) echo "::error::image has no core/ libraries — the build stopped before core"; fail=1 ;;
           esac
+          if missing=$(printf '%s\n' "$manifest" | grep '^MISSING '); then
+            echo "::error::image is missing paths a build needs:"
+            printf '%s\n' "$missing"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
 
       - name: Push
         run: |

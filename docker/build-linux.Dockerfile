@@ -132,15 +132,31 @@ RUN set -eux; \
     scripts/apply_build_flags.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
     scripts/patch_qt_compat.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
     scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh || true; \
+    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh > /tmp/build.log 2>&1 \
+      && echo "build_desktop: completed" > /tmp/build.status \
+      || { echo "build_desktop: FAILED (expected at desktop-apps; see the tail below)" > /tmp/build.status; \
+           tail -40 /tmp/build.log; }; \
+    cat /tmp/build.status; \
     rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
 
 # Record what got baked, so an image in a registry can be identified without
 # running it: docker run --rm IMAGE cat /etc/lightoffice-build-image
+# The manifest records every path a consuming build needs, not just the ones
+# built earliest. The first version of this checked only libv8_monolith.a and
+# core/'s libraries — both produced BEFORE sdkjs — so when the image was
+# missing sdkjs/build/build.py the build_desktop failure above was swallowed,
+# verification passed, the image published, and a release run spent 23 minutes
+# restoring it before dying on the missing file. A check that cannot fail for
+# the thing that breaks is not a check.
 RUN { \
       printf 'prebuilt_src=%s\n' "$LIGHTOFFICE_PREBUILT_SRC"; \
+      cat /tmp/build.status 2>/dev/null || echo "build_desktop: status unknown"; \
       printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
       printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
+      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
+        if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
+        else printf 'MISSING %s\n' "$p"; fi; \
+      done; \
       printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
     } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 
