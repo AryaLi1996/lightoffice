@@ -235,15 +235,30 @@ patch_v8_for_cstdint() {
   return 0
 }
 
-./tools/linux/python3/bin/python3 ./make.py
-rc=$?
+# `set -e` is on, so a bare `make.py` followed by `rc=$?` never reaches the
+# retry: the failing command aborts the script first, and everything below it
+# — including the patch above — is dead code. That is exactly what happened on
+# 2026-09-08: v8 was fetched, the compile failed with the intptr_t errors the
+# patch exists to fix, and the patch never ran. Disable the trap around the two
+# invocations whose failure this script is designed to handle.
+run_make() {
+  local status
+  set +e
+  ./tools/linux/python3/bin/python3 ./make.py
+  status=$?
+  set -e
+  return "$status"
+}
+
+rc=0
+run_make || rc=$?
 
 if [ "$rc" -ne 0 ]; then
   if patch_v8_for_cstdint; then
     echo
     echo "make.py failed; v8's src/base/macros.h was missing <cstdint>. Patched it — retrying."
-    ./tools/linux/python3/bin/python3 ./make.py
-    rc=$?
+    rc=0
+    run_make || rc=$?
   fi
 fi
 
