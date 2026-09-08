@@ -120,10 +120,18 @@ jobs:
             echo "hit=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           docker run --rm "$repo:$tag" cat /etc/lightoffice-build-image || true
+
+          # Disk is the leading suspect for a truncated restore: the runner
+          # holds the pulled layers AND a second full copy of the tree, and a
+          # copy that dies on ENOSPC part way through leaves a plausible-looking
+          # but incomplete tree. Record it either side so a future failure is
+          # answerable from the log instead of guessed at.
+          echo "disk before copy:"; df -h / | tail -1
           sudo mkdir -p /opt/lightoffice
           cid="$(docker create "$repo:$tag")"
           sudo docker cp "$cid:/opt/lightoffice/src" /opt/lightoffice/src
           docker rm "$cid" >/dev/null
+          echo "disk after copy:"; df -h / | tail -1
           sudo chown -R "$(id -u):$(id -g)" /opt/lightoffice
           docker rmi "$repo:$tag" >/dev/null 2>&1 || true
           echo "restored $(du -sh /opt/lightoffice/src | cut -f1) to /opt/lightoffice/src"
