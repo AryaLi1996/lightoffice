@@ -50,6 +50,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       build-essential cmake p7zip-full autoconf libtool \
       qtbase5-dev qtbase5-private-dev qttools5-dev libqt5svg5-dev \
+      qtmultimedia5-dev libqt5x11extras5-dev \
       libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
       libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
       libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \

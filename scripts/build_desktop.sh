@@ -63,6 +63,7 @@ done
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
+warn() { printf '  \033[33m!\033[0m %s\n' "$*"; }
 
 echo "Preflight checks"
 
@@ -126,6 +127,55 @@ elif [ -d "$BUILD_TOOLS/tools/linux/system_qt/gcc_64" ]; then
   fi
 else
   bad "no Qt — run: (cd $BUILD_TOOLS/tools/linux && python3 use_system_qt.py)"; fatal=1
+fi
+
+# 3b. Qt MODULES, not just Qt. Upstream normally fetches a prebuilt Qt that
+#     carries every module, so its deps.py names no Qt packages at all; on a
+#     system Qt each module is a separate distro package and a missing one is
+#     invisible until qmake reaches the .pro that asks for it. That cost a full
+#     84-minute build: core/ compiled and linked in its entirety, then
+#     desktop-sdk stopped dead on
+#
+#         Project ERROR: Unknown module(s) in QT: multimedia multimediawidgets
+#
+#     Checking here turns that into three seconds. The list is every module the
+#     upstream .pro/.pri files request beyond what qtbase5-dev alone provides,
+#     taken from a scan of desktop-sdk, DesktopEditors and desktop-apps.
+qt_modules_dir=""
+for q in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*/gcc_64/bin/qmake \
+         "$BUILD_TOOLS"/tools/linux/system_qt/gcc_64/bin/qmake \
+         "$(command -v qmake 2>/dev/null || true)"; do
+  [ -x "$q" ] || continue
+  archdata="$("$q" -query QT_INSTALL_ARCHDATA 2>/dev/null || true)"
+  if [ -z "$archdata" ] || [ ! -d "$archdata/mkspecs/modules" ]; then continue; fi
+  qt_modules_dir="$archdata/mkspecs/modules"
+  break
+done
+
+if [ -z "$qt_modules_dir" ]; then
+  warn "could not locate Qt's mkspecs/modules; skipping the Qt module check"
+else
+  # module:apt-package — qmake resolves "QT += foo" through qt_lib_foo.pri.
+  qt_missing=()
+  for spec in \
+      multimedia:qtmultimedia5-dev \
+      multimediawidgets:qtmultimedia5-dev \
+      x11extras:libqt5x11extras5-dev \
+      svg:libqt5svg5-dev \
+      gui_private:qtbase5-private-dev \
+      printsupport_private:qtbase5-private-dev; do
+    mod="${spec%%:*}"
+    [ -f "$qt_modules_dir/qt_lib_$mod.pri" ] || qt_missing+=("$spec")
+  done
+
+  if [ "${#qt_missing[@]}" -eq 0 ]; then
+    ok "Qt modules present (multimedia, multimediawidgets, x11extras, svg, private headers)"
+  else
+    pkgs="$(printf '%s\n' "${qt_missing[@]}" | cut -d: -f2 | sort -u | tr '\n' ' ')"
+    bad "missing Qt modules: $(printf '%s ' "${qt_missing[@]%%:*}")"
+    bad "  install: sudo apt-get install -y ${pkgs% }"
+    fatal=1
+  fi
 fi
 
 # 4. v8. This is the one dependency with no supported substitute on Linux:
