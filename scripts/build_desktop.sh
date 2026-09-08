@@ -38,10 +38,13 @@
 #     Error: client not configured; see 'gclient config'
 #
 # so no v8 is fetched and v8_89.py reaches os.chdir("v8") with nothing there.
-# That is upstream drift in a third-party dependency, not a setting here, and
-# pre-staging a pinned depot_tools does not help: v8_89.py calls
-# common_check_version("v8", "1", clean), and clean() deletes depot_tools
-# before the clone. See the PR discussion for the options.
+# That is upstream drift in a third-party dependency, not a setting here.
+#
+# It IS fixable by pre-staging a pinned depot_tools, with one detail that an
+# earlier attempt missed. v8_89.py calls common_check_version("v8", "1", clean),
+# and clean() deletes depot_tools — but only when ./v8.data does not already
+# hold the exact string "v8_version_1". fetch_prebuilts.sh writes that marker
+# alongside the staged checkout, so the clone is skipped and the pin survives.
 
 set -euo pipefail
 
@@ -196,6 +199,19 @@ for cand in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*; do
   [ -d "$cand/gcc_64" ] && { QT_DIR="$cand"; break; }
 done
 echo "sysroot: $SYSROOT"
+
+# Hold the depot_tools pin that fetch_prebuilts.sh staged — but ONLY if that
+# staging actually completed. depot_tools provisions its Python during the same
+# self-update this disables, so setting it blindly is how a previous attempt
+# turned a fetch failure into "python3_bin_reldir.txt not found". The presence
+# of that file is the evidence that the bootstrap already ran.
+STAGED_DEPOT_TOOLS="$SRC/core/Common/3dParty/v8_89/depot_tools"
+if [ -f "$STAGED_DEPOT_TOOLS/python3_bin_reldir.txt" ]; then
+  export DEPOT_TOOLS_UPDATE=0
+  echo "depot_tools: staged and bootstrapped, holding the pin ($(git -C "$STAGED_DEPOT_TOOLS" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+else
+  echo "depot_tools: not staged here; leaving its self-update enabled so it can bootstrap itself"
+fi
 
 ./tools/linux/python3/bin/python3 ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
