@@ -135,6 +135,59 @@ else
   fi
 fi
 
+# --- depot_tools, pinned ------------------------------------------------------
+# v8_89.py clones depot_tools from HEAD, unpinned, and only when the directory
+# is absent:
+#
+#     if not base.is_dir("depot_tools"):
+#         base.cmd("git", ["clone", ".../depot_tools.git"])
+#
+# An unpinned HEAD dependency inside a build is a defect waiting for a quiet
+# morning, and it found one. The same code path fetched v8 successfully on
+# 2026-09-07 and failed on 2026-09-08 with:
+#
+#     ./cipd: line 146: ./depot_tools/cipd_client_version.digests: No such file
+#     Platform linux-amd64 is not supported by the CIPD client bootstrap
+#     Error: client not configured; see 'gclient config'
+#
+# depot_tools no longer ships that file, so its CIPD bootstrap cannot start, no
+# Python is provisioned, gclient is never configured and no v8 is fetched —
+# which surfaces much later as FileNotFoundError on os.chdir("v8").
+#
+# Staging depot_tools here takes the clone away from upstream (its is_dir guard
+# then skips it) and pins it to the last revision that can still bootstrap. The
+# pin is discovered rather than hardcoded: ask git which commit deleted the
+# file and take its parent. That stays correct if the file returns, and it
+# needs no SHA that would itself go stale.
+V8_BASE="$SRC/core/Common/3dParty/v8_89"
+DEPOT_TOOLS="$V8_BASE/depot_tools"
+DEPOT_TOOLS_URL="https://chromium.googlesource.com/chromium/tools/depot_tools.git"
+
+if [ -d "$DEPOT_TOOLS/.git" ]; then
+  ok "depot_tools already staged ($(git -C "$DEPOT_TOOLS" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+elif ! git ls-remote --exit-code "$DEPOT_TOOLS_URL" HEAD >/dev/null 2>&1; then
+  warn "depot_tools is unreachable from here; upstream will try its own clone during the build"
+else
+  mkdir -p "$V8_BASE"
+  if git clone --quiet "$DEPOT_TOOLS_URL" "$DEPOT_TOOLS"; then
+    if [ -f "$DEPOT_TOOLS/cipd_client_version.digests" ]; then
+      ok "depot_tools at HEAD still has cipd_client_version.digests; left unpinned"
+    else
+      # --diff-filter=D finds the commit that removed it; its parent is the last
+      # revision where the CIPD bootstrap still works.
+      deleted_in="$(git -C "$DEPOT_TOOLS" log --format=%H --diff-filter=D -1 \
+                      -- cipd_client_version.digests 2>/dev/null || true)"
+      if [ -n "$deleted_in" ] && git -C "$DEPOT_TOOLS" checkout --quiet "${deleted_in}^"; then
+        ok "depot_tools pinned to ${deleted_in:0:12}^ — the last revision with cipd_client_version.digests"
+      else
+        warn "cipd_client_version.digests is missing and no deletion commit was found; the v8 fetch will probably fail"
+      fi
+    fi
+  else
+    warn "depot_tools clone failed; upstream will try its own during the build"
+  fi
+fi
+
 # deps.py runs a long apt-get list; skip it when the packages are already there.
 touch "$BUILD_TOOLS/tools/linux/packages_complete"
 

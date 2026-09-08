@@ -190,6 +190,12 @@ for cand in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*; do
   [ -d "$cand/gcc_64" ] && { QT_DIR="$cand"; break; }
 done
 echo "sysroot: $SYSROOT"
+
+# depot_tools updates itself to HEAD on first use, which would silently undo the
+# revision fetch_prebuilts.sh pinned it to. The pin exists because HEAD cannot
+# currently bootstrap CIPD, so letting it self-update reintroduces the failure.
+export DEPOT_TOOLS_UPDATE=0
+
 ./tools/linux/python3/bin/python3 ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
 
