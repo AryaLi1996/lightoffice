@@ -1,6 +1,0 @@
- b18715ae811aaa5cd9dae2dd9a4b9412d38b8b7b core (b18715ae)
- bc46371aa062a7718cd90268e94c3d2b10ce3c51 desktop-apps (bc46371)
- 6bd2051287a496ac1504214caca69a5729625696 desktop-sdk (6bd2051)
- d3223bbb777883db66ac3cd249f71c6ebdc992c7 dictionaries (v10.0.0.1)
- b2f0aa1d5ca8c82e827ff3af6577d8edf913a2e7 sdkjs (b2f0aa1)
- 1c8ca9987876bada73c0bde21367da09c0e1ed83 web-apps (1c8ca998)

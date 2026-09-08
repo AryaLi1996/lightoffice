@@ -100,20 +100,51 @@ jobs:
         if: matrix.os == 'linux'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
 
+      # ninja and make both key off absolute paths and mtimes, so the tree is
+      # restored to the SAME path the image built it at (/opt/lightoffice/src).
+      # Restoring elsewhere would rebuild everything and buy nothing.
+      #
+      # Best-effort by design: if no image has been published yet, or the pull
+      # fails, the build falls through to a full from-source build exactly as
+      # before. A missing cache must never be a broken pipeline.
+      - id: prebuilt
+        name: Restore prebuilt dependencies from the build image
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          repo="$(echo "ghcr.io/${{ github.repository }}-build" | tr '[:upper:]' '[:lower:]')"
+          tag="$(grep '^UPSTREAM_TAG=' VERSION_LOCK | cut -d= -f2)"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin || true
+          if ! docker pull "$repo:$tag"; then
+            echo "::notice::no prebuilt image at $repo:$tag — building everything from source"
+            echo "hit=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          docker run --rm "$repo:$tag" cat /etc/lightoffice-build-image || true
+          sudo mkdir -p /opt/lightoffice
+          cid="$(docker create "$repo:$tag")"
+          sudo docker cp "$cid:/opt/lightoffice/src" /opt/lightoffice/src
+          docker rm "$cid" >/dev/null
+          sudo chown -R "$(id -u):$(id -g)" /opt/lightoffice
+          docker rmi "$repo:$tag" >/dev/null 2>&1 || true
+          echo "restored $(du -sh /opt/lightoffice/src | cut -f1) to /opt/lightoffice/src"
+          echo "hit=true" >> "$GITHUB_OUTPUT"
+
       - name: Bootstrap upstream sources
         shell: bash
-        run: scripts/bootstrap.sh "$RUNNER_TEMP/onlyoffice-src"
+        env:
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
+        run: scripts/bootstrap.sh "$LIGHTOFFICE_SRC"
 
       - name: Fetch prebuilt CEF and bootstrap Python
         shell: bash
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: scripts/fetch_prebuilts.sh || echo "::warning::prebuilt fetch incomplete; the build may not start"
 
       - name: Apply the LightOffice overlay
         shell: bash
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: |
           scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
           scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
@@ -130,7 +161,7 @@ jobs:
         if: matrix.os == 'linux'
         shell: bash
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: scripts/check_qt_compat.sh
 
       # Compiling is Linux-only, so the preflight runs only there. Letting it
@@ -146,21 +177,21 @@ jobs:
         shell: bash
         continue-on-error: true
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: scripts/build_desktop.sh --check-only
 
       - name: Build the desktop editors
         if: matrix.os == 'linux' && steps.pre.outcome == 'success'
         shell: bash
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: scripts/build_desktop.sh
 
       - name: Package
         if: matrix.os == 'linux' && steps.pre.outcome == 'success'
         shell: bash
         env:
-          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+          LIGHTOFFICE_SRC: ${{ matrix.os == 'linux' && '/opt/lightoffice/src' || format('{0}/onlyoffice-src', runner.temp) }}
         run: scripts/package.sh --version "${{ needs.preflight.outputs.version }}"
 
       # A build that ran and then produced nothing is a green check that means
