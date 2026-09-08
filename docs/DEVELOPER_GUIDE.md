@@ -165,6 +165,46 @@ docker run --rm lightoffice-build:24.04 cat /etc/lightoffice-build-image  # 查�
 上游的 `fix_ubuntu24` 补救措施，并对 v8 源码补 `#include <cstdint>`
 （v8 8.9 的旧代码依赖了较老 libstdc++ 的传递包含），然后重试。
 
+## 4.2 为什么构建要一小时，以及怎么不再花这一小时
+
+一次完整桌面版构建约 61 分钟，其中约 55 分钟在重建**每次都一样**的固定依赖：
+
+| 阶段 | 约耗时 | 每次运行会变吗 |
+| --- | --- | --- |
+| boost / cef / icu / openssl | 10 min | 否（已钉住） |
+| **v8（2929 个目标）** | **45 min** | 否（已钉住） |
+| `core/` | 20 min | 否（已钉住） |
+| `desktop-sdk` + `desktop-apps` | 3 min | **是 —— 我们真正在改的就是这部分** |
+
+所以一个漏写的 `#include` 要一小时才能发现，而且只能发现**第一个**，因为
+`make` 在第一个错误就停了。两个措施分别针对这两件事：
+
+**1. 一分钟内发现编译错误。** `scripts/check_qt_compat.sh` 用
+`g++ -fsyntax-only` 编译同一批源码，完全不构建。在未打补丁的钉住版本树上，
+它 71 秒内报出全部 11 条错误（3 类问题）；打上补丁后 59 个文件 61 秒通过。
+它在 release 流水线里跑在长构建**之前**。
+
+> 写这个检查时踩过一个坑值得记下：第一版漏了 `-D__DONT_WRITE_IN_APP_TITLE`，
+> 于是它信心十足地报了 4 个错，而那段代码真实构建根本不会编译。
+> **一个会凭空造出失败的检查，比没有检查更糟。** 现在宏定义列表是从构建日志里
+> 的 qmake 命令行抄下来的，不是猜的。
+
+**2. 固定依赖只构建一次。** `docker/build-linux.Dockerfile` 在镜像构建期把
+depot_tools、boost/cef/icu/openssl、v8 和 `core/` 全部编好烘焙进镜像，
+由 `.github/workflows/build-image.yml` 推到 GHCR；release 流水线拉取后
+把整棵树还原出来，ninja/make 判定为已是最新，直接跳过。
+
+**路径必须完全一致。** ninja 在 `build.ninja` 和 `.ninja_deps` 里记录的是
+绝对路径，在 A 路径构建、到 B 路径使用，会被判定为全部过期而重新编译一遍，
+镜像就白做了。因此镜像和流水线两边都固定使用 `/opt/lightoffice/src`，
+而不是 `$RUNNER_TEMP`。改路径只能在这一个地方改。
+
+同理，镜像里**必须保留 `.git`**：`bootstrap.sh` 靠 `$SRC/.git` 判断树是否已存在，
+删掉它流水线就会往非空目录里 `git clone` 然后失败。
+
+镜像不在 push 路径上：它要跑一个多小时，只有上游钉住版本、构建开关或
+Dockerfile 变化时才需要重建。
+
 ## 5. 跟进上游版本
 
 1. 重新 clone 上游到干净目录（或 `git submodule update --remote`）。

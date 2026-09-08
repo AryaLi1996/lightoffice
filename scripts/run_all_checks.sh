@@ -120,9 +120,12 @@ if need_src; then
   else emit "zh locale coverage" MISSING "scripts/check_i18n.sh not found"; fi
   if [ -x scripts/count_toolbar.sh ]; then run "toolbar reduction" scripts/count_toolbar.sh --min 20 "$SRC"
   else emit "toolbar reduction" MISSING "scripts/count_toolbar.sh not found"; fi
+  if [ -x scripts/check_qt_compat.sh ]; then run "desktop-apps compiles vs Qt" scripts/check_qt_compat.sh "$SRC"
+  else emit "desktop-apps compiles vs Qt" MISSING "scripts/check_qt_compat.sh not found"; fi
 else
   emit "zh locale coverage" SKIP "no upstream checkout at $SRC"
   emit "toolbar reduction" SKIP "no upstream checkout at $SRC"
+  emit "desktop-apps compiles vs Qt" SKIP "no upstream checkout at $SRC"
 fi
 
 printf '\n\033[1mlive stack\033[0m\n'

@@ -92,5 +92,57 @@ RUN { echo "base=ubuntu:24.04"; \
 # this image exists to eliminate.
 ENV DEPOT_TOOLS_UPDATE=0
 
+# ---------------------------------------------------------------------------
+# Prebuilt dependencies
+# ---------------------------------------------------------------------------
+# About 55 of the desktop build's 61 minutes rebuild pinned dependencies that
+# never change between runs: boost, cef, icu, openssl, then v8's 2929 targets,
+# then core/. Only the last few minutes compile the code we iterate on. Doing
+# that work once, here, is the whole point of this stage.
+#
+# THE PATH MATTERS. ninja records absolute paths in build.ninja and .ninja_deps,
+# so a tree built at one path and used at another is rebuilt from scratch and
+# this stage buys nothing. LIGHTOFFICE_PREBUILT_SRC is therefore a fixed
+# absolute path, and the release workflow extracts the tree back to the SAME
+# path rather than to $RUNNER_TEMP. Change it in one place only.
+ENV LIGHTOFFICE_PREBUILT_SRC=/opt/lightoffice/src
+
+# The build scripts, not the whole repo: this layer should not be invalidated
+# by a docs or test change.
+COPY scripts/ /opt/lightoffice/repo/scripts/
+COPY overlay/ /opt/lightoffice/repo/overlay/
+COPY baseline/ /opt/lightoffice/repo/baseline/
+COPY VERSION_LOCK /opt/lightoffice/repo/
+
+# Bootstrap the pinned upstream tree, stage the prebuilts, and build. The build
+# is expected to get as far as desktop-apps; what we are banking is everything
+# before it. `|| true` because a failure IN desktop-apps still leaves v8, the
+# 3rd-party deps and core/ built, which is exactly what we came for — and the
+# release workflow rebuilds and reports that part properly anyway.
+#
+# The git metadata STAYS. bootstrap.sh decides whether a tree already exists by
+# testing "$SRC/.git", and runs `git submodule status` over it; strip it and the
+# release workflow tries to clone into a non-empty directory and fails. Only
+# openssl's generated HTML docs are pruned, which nothing reads.
+RUN set -eux; \
+    cd /opt/lightoffice/repo; \
+    scripts/bootstrap.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/fetch_prebuilts.sh; \
+    scripts/apply_overlay.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    scripts/apply_build_flags.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    scripts/patch_qt_compat.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh || true; \
+    rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
+
+# Record what got baked, so an image in a registry can be identified without
+# running it: docker run --rm IMAGE cat /etc/lightoffice-build-image
+RUN { \
+      printf 'prebuilt_src=%s\n' "$LIGHTOFFICE_PREBUILT_SRC"; \
+      printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
+      printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
+      printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
+    } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
+
 WORKDIR /work
 CMD ["/bin/bash"]
