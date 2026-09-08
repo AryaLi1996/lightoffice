@@ -117,7 +117,21 @@ jobs:
         run: |
           scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
           scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
+          scripts/patch_qt_compat.sh "$LIGHTOFFICE_SRC"
           scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
+
+      # Roughly 55 of the desktop build's 61 minutes rebuild pinned dependencies
+      # (boost, cef, icu, openssl, v8's 2929 targets, core/) that never change
+      # between runs; only the last few minutes compile desktop-apps. Without
+      # this step a missing include there is discovered an hour in, and only the
+      # first one, because make stops at it. This compiles the same sources with
+      # -fsyntax-only in about a minute and reports all of them.
+      - name: Check desktop-apps compiles against this Qt
+        if: matrix.os == 'linux'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
+        run: scripts/check_qt_compat.sh
 
       # Compiling is Linux-only, so the preflight runs only there. Letting it
       # run everywhere made build_desktop.sh's platform guard exit 2 on macOS
