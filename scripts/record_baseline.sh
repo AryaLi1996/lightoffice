@@ -29,6 +29,9 @@ for a in "$@"; do
 done
 SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 OUT="$ROOT/baseline_metrics.json"
+# shellcheck source=scripts/lib/portable.sh
+. "$ROOT/scripts/lib/portable.sh"
+
 
 [ -d "$SRC" ] || { echo "no upstream checkout at $SRC" >&2; exit 1; }
 
@@ -38,7 +41,7 @@ if [ -f "$OUT" ] && [ "$FORCE" -eq 0 ]; then
   exit 0
 fi
 
-dirsize() { [ -d "$1" ] && du -sb "$1" 2>/dev/null | cut -f1 || echo 0; }
+dirsize() { dir_bytes "$1"; }
 
 echo "measuring pristine sizes under $SRC ..."
 dict=$(dirsize "$SRC/dictionaries")

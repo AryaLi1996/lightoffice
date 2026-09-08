@@ -18,6 +18,9 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=scripts/lib/portable.sh
+. "$ROOT/scripts/lib/portable.sh"
+
 JSON_OUT="$ROOT/baseline/ac_report.json"
 ARGS=()
 while [ $# -gt 0 ]; do
@@ -382,7 +385,7 @@ DB="$ROOT/baseline/dictionaries.baseline"
 if [ "$HAVE_SRC" -eq 0 ]; then
   record 4.1 SKIPPED "词典体积校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
 elif [ -f "$DB" ] && [ -d "$SRC/dictionaries" ]; then
-  before=$(cat "$DB"); after=$(du -sb "$SRC/dictionaries" | cut -f1)
+  before=$(cat "$DB"); after=$(dir_bytes "$SRC/dictionaries")
   pct=$(awk -v a="$after" -v b="$before" 'BEGIN{printf "%.1f", a*100.0/b}')
   keep=$(find "$SRC/dictionaries" -mindepth 1 -maxdepth 1 -type d | wc -l)
   if awk -v p="$pct" 'BEGIN{exit !(p < 50)}'; then

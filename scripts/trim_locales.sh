@@ -28,6 +28,9 @@ for a in "$@"; do
 done
 SRC="${ARGS[0]:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 WEB="$SRC/web-apps/apps"
+# shellcheck source=scripts/lib/portable.sh
+. "$ROOT/scripts/lib/portable.sh"
+
 
 [ -d "$WEB" ] || { echo "no web-apps at $WEB" >&2; exit 1; }
 
@@ -39,7 +42,7 @@ fi
 
 keep_re="^($(IFS='|'; echo "${KEEP[*]}"))\.json$"
 
-before=$(find "$WEB" -type d -name locale -exec du -sb {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+before=$(find "$WEB" -type d -name locale | dirs_bytes_stdin)
 removed=0
 kept=0
 
@@ -55,7 +58,7 @@ while IFS= read -r d; do
   done < <(find "$d" -maxdepth 1 -name '*.json')
 done < <(find "$WEB" -type d -name locale | sort)
 
-after=$(find "$WEB" -type d -name locale -exec du -sb {} + 2>/dev/null | awk '{s+=$1} END{print s+0}')
+after=$(find "$WEB" -type d -name locale | dirs_bytes_stdin)
 
 echo "kept languages : ${KEEP[*]}"
 echo "files kept     : $kept"
