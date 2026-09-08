@@ -165,8 +165,30 @@ write_v8_marker() {
   printf '%s' 'v8_version_1' > "$V8_MARKER"
 }
 
+# A prebuilt image (docker/build-linux.Dockerfile) bakes a pinned, bootstrapped
+# depot_tools in at image-build time, when the network is available, and points
+# this variable at it. Copying it in means a container build needs no access to
+# chromium.googlesource.com or chrome-infra-packages.appspot.com at all — which
+# is the difference between "builds on a network that allows Google's
+# infrastructure" and "builds anywhere".
+CACHE="${LIGHTOFFICE_DEPOT_TOOLS_CACHE:-}"
+
 if [ -d "$DEPOT_TOOLS/.git" ]; then
   ok "depot_tools already staged ($(git -C "$DEPOT_TOOLS" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+  write_v8_marker
+  ok "v8.data marker written — upstream will keep the staged checkout"
+elif [ -n "$CACHE" ] && [ -d "$CACHE/.git" ]; then
+  mkdir -p "$V8_BASE"
+  # cp -a, not a symlink: upstream's clean() removes this path outright on a
+  # marker mismatch, and a symlink would take the cache down with it. The copy
+  # keeps the image's known-good checkout intact whatever the build does.
+  cp -a "$CACHE" "$DEPOT_TOOLS"
+  ok "depot_tools restored from image cache ($(git -C "$DEPOT_TOOLS" rev-parse --short HEAD 2>/dev/null || echo '?'))"
+  if [ -f "$DEPOT_TOOLS/python3_bin_reldir.txt" ]; then
+    ok "cached depot_tools carries its bootstrapped python3"
+  else
+    warn "cached depot_tools has no python3_bin_reldir.txt; the build will need to bootstrap it online"
+  fi
   write_v8_marker
   ok "v8.data marker written — upstream will keep the staged checkout"
 elif ! git ls-remote --exit-code "$DEPOT_TOOLS_URL" HEAD >/dev/null 2>&1; then

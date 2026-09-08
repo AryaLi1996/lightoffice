@@ -130,6 +130,41 @@ git -C /home/user/onlyoffice-src submodule foreach 'git diff --stat'
 git -C /home/user/onlyoffice-src/web-apps checkout -- .
 ```
 
+## 4.1 编译桌面版：depot_tools 与容器镜像
+
+桌面版必须编译 v8（2929 个目标，约两小时）。上游用 depot_tools 从
+`chromium.googlesource.com` 拉取 v8，depot_tools 又从
+`chrome-infra-packages.appspot.com` 自举它的 CIPD 客户端。这带来两个真实
+踩过的坑：
+
+1. **depot_tools 默认取 HEAD。** 2026-09-07 还能正常拉取 v8 的那个版本，
+   到 09-08 就无法自举 CIPD 客户端了 —— 我们一行代码没改，构建却全线失败。
+   `scripts/fetch_prebuilts.sh` 因此把它钉在 `PIN_BEFORE`（默认 `2026-09-07`）
+   之前的最后一个 revision，并在当场执行 `ensure_bootstrap`，趁网络还在的
+   时候把 depot_tools 自己的 python3 装好。
+2. **钉住之后还必须写 marker。** `v8_89.py` 调用
+   `base.common_check_version("v8", "1", clean)`，而 `base.py` 会把
+   `./v8.data` 与字符串 `v8_version_1` 做**逐字节**比较，不一致（包括文件
+   不存在）就调用 `clean()`，把 `depot_tools`、`v8`、`.gclient` 全删掉。
+   所以 marker 必须无换行符地写入，否则预置的 depot_tools 会被上游删除
+   （日志里表现为 `delete warning [folder not exist]: depot_tools`）。
+
+在无法访问 Google 基础设施的网络上（沙箱 CI、企业出口策略），构建根本无从
+开始。`docker/build-linux.Dockerfile` 解决这一点：镜像构建期间联网克隆一次
+depot_tools、钉住、自举，烘焙进镜像；之后每次构建通过
+`LIGHTOFFICE_DEPOT_TOOLS_CACHE` 复制进去，**运行期完全不需要访问
+chromium.googlesource.com**。
+
+```bash
+docker build -f docker/build-linux.Dockerfile -t lightoffice-build:24.04 .
+docker run --rm lightoffice-build:24.04 cat /etc/lightoffice-build-image  # 查看烘焙的 pin
+```
+
+镜像基于 `ubuntu:24.04`，与流水线验证过的 runner 一致。24.04 上 v8 自带的
+`libstdc++.so.6` 比宿主的旧，链接会失败；`scripts/build_desktop.sh` 会套用
+上游的 `fix_ubuntu24` 补救措施，并对 v8 源码补 `#include <cstdint>`
+（v8 8.9 的旧代码依赖了较老 libstdc++ 的传递包含），然后重试。
+
 ## 5. 跟进上游版本
 
 1. 重新 clone 上游到干净目录（或 `git submodule update --remote`）。
