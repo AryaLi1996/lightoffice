@@ -18,6 +18,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${1:-${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}}"
 DICT="$SRC/dictionaries"
+# shellcheck source=scripts/lib/portable.sh
+. "$ROOT/scripts/lib/portable.sh"
+
 BASELINE="$ROOT/baseline/dictionaries.baseline"
 
 KEEP=(en_US zh_CN)
@@ -28,7 +31,7 @@ KEEP=(en_US zh_CN)
 # real starting point rather than an already-trimmed tree.
 if [ ! -f "$BASELINE" ]; then
   mkdir -p "$(dirname "$BASELINE")"
-  du -sb "$DICT" | cut -f1 > "$BASELINE"
+  dir_bytes "$DICT" > "$BASELINE"
   echo "recorded baseline: $(cat "$BASELINE") bytes"
 fi
 BEFORE=$(cat "$BASELINE")
@@ -51,7 +54,7 @@ while IFS= read -r d; do
   fi
 done < <(find "$DICT" -mindepth 1 -maxdepth 1 -type d)
 
-AFTER=$(du -sb "$DICT" | cut -f1)
+AFTER=$(dir_bytes "$DICT")
 PCT=$(awk -v a="$AFTER" -v b="$BEFORE" 'BEGIN{ if(b==0){print "n/a"} else {printf "%.1f", a*100.0/b} }')
 
 echo "kept        : ${KEEP[*]}"

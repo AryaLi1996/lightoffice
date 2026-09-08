@@ -7,7 +7,24 @@
 # the three prerequisites that actually fail in locked-down networks, because
 # automate.py's own failure mode is an opaque wget error several minutes in.
 #
-# Usage: scripts/build_desktop.sh [--check-only]
+# Usage: scripts/build_desktop.sh [--check-only] [--sysroot 0|1]
+#
+# --sysroot selects how v8 and the C++ modules are compiled, and it is not the
+# cosmetic flag it looks like. Upstream's configure.py normalises "0" to the
+# empty string, and scripts/core_common/modules/v8_89.py branches on that:
+#
+#   sysroot != ""  ->  use_sysroot=true,  is_clang=false, sysroot=<ubuntu16>
+#   sysroot == ""  ->  is_clang=true,     use_sysroot=false, use_custom_libcxx=false
+#
+# The second path compiles v8 against the HOST's glibc headers. On Ubuntu 24.04
+# that fails: v8's src/base/macros.h uses intptr_t/uintptr_t without including
+# <cstdint>, which older headers supplied transitively and current ones do not
+# ("unknown type name 'intptr_t'", 15 errors, ~23 minutes in). Upstream expects
+# the sysroot path on modern Ubuntu — v8_89.py carries an is_ubuntu_24_or_higher()
+# accommodation inside that branch and none in the other.
+#
+# So the default here is 1. Override with --sysroot 0 or LIGHTOFFICE_SYSROOT=0
+# on a host old enough not to need it, or if the sysroot download is blocked.
 
 set -euo pipefail
 
@@ -15,7 +32,14 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 CHECK_ONLY=0
-[ "${1:-}" = "--check-only" ] && CHECK_ONLY=1
+SYSROOT="${LIGHTOFFICE_SYSROOT:-1}"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check-only) CHECK_ONLY=1; shift ;;
+    --sysroot) SYSROOT="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31m✗\033[0m %s\n' "$*"; }
@@ -70,8 +94,31 @@ for host in chromium.googlesource.com chrome-infra-packages.appspot.com; do
   fi
 done
 
-# 5. Disk. A full build materialises boost, ICU, OpenSSL, CEF, v8 and all objects.
-avail_gb=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+# 5. The ubuntu16 sysroot, when it is the one being used. It is fetched from
+#    build_tools_data over plain HTTPS at configure time; if that is blocked the
+#    build dies well into the run rather than here.
+if [ "$SYSROOT" = "1" ]; then
+  sysroot_dir="$BUILD_TOOLS/tools/linux/sysroot/ubuntu16-amd64-sysroot"
+  if [ -d "$sysroot_dir" ]; then
+    ok "ubuntu16 sysroot already unpacked"
+  else
+    code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' \
+      "https://github.com/ONLYOFFICE-data/build_tools_data/raw/refs/heads/master/sysroot/ubuntu16-amd64-sysroot.tar.gz" \
+      2>/dev/null || true); code="${code:-000}"
+    case "$code" in
+      000|403|404|407)
+        bad "sysroot download unreachable (HTTP $code) — rerun with --sysroot 0, but note v8 will then compile against host glibc headers"
+        fatal=1 ;;
+      *) ok "sysroot download reachable (HTTP $code)" ;;
+    esac
+  fi
+else
+  ok "sysroot disabled (--sysroot 0): v8 will compile against host glibc headers"
+fi
+
+# 6. Disk. A full build materialises boost, ICU, OpenSSL, CEF, v8 and all objects.
+#    df -BG/--output are GNU extensions; -k is in POSIX and works on macOS too.
+avail_gb=$(df -k . | awk 'NR==2 {print int($4/1048576)}')
 if [ "${avail_gb:-0}" -ge 40 ]; then
   ok "disk: ${avail_gb}G available"
 else
@@ -95,10 +142,9 @@ echo "Running upstream build (this takes hours) ..."
 cd "$BUILD_TOOLS"
 QT_DIR="$BUILD_TOOLS/tools/linux/system_qt"
 [ -d "$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9" ] && QT_DIR="$BUILD_TOOLS/tools/linux/qt_build/Qt-5.9.9"
-# --sysroot 0: the ubuntu16 sysroot is LFS-tracked and only affects glibc
-# compatibility of the shipped binary, not whether it builds.
+echo "sysroot: $SYSROOT"
 ./tools/linux/python3/bin/python3 ./configure.py \
-    --branch master --module desktop --sysroot 0 --update 0 --qt-dir "$QT_DIR"
+    --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
 ./tools/linux/python3/bin/python3 ./make.py
 rc=$?
 

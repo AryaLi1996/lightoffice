@@ -114,8 +114,17 @@ if [ -d deploy/aws ]; then
 fi
 
 hdr "executable bits"
+# scripts/lib/ holds files that are sourced, not run. They carry no shebang, so
+# an execute bit there would be a lie about how the file is used — the rule is
+# inverted for that directory rather than waived.
 while IFS= read -r f; do
-  [ -x "$f" ] && ok "+x $f" || bad "$f is not executable"
+  case "$f" in
+    scripts/lib/*)
+      [ -x "$f" ] && bad "$f is a sourced library and must not be executable" \
+                  || ok "-x $f (sourced library)" ;;
+    *)
+      [ -x "$f" ] && ok "+x $f" || bad "$f is not executable" ;;
+  esac
 done < <(find scripts -name '*.sh' | sort)
 
 printf '\n'
