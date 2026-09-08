@@ -16,26 +16,32 @@
 #   sysroot != ""  ->  use_sysroot=true,  is_clang=false, sysroot=<ubuntu16>
 #   sysroot == ""  ->  is_clang=true,     use_sysroot=false, use_custom_libcxx=false
 #
-# BOTH settings were tried in CI, and both break, in different places:
+# Both settings were tried in CI. sysroot=0 is the default because it is the
+# one whose failure is ours to fix:
 #
-#   sysroot=0  fetch works, boost builds via b2, and v8 then FAILS TO COMPILE on
-#              Ubuntu 24.04: src/base/macros.h uses intptr_t/uintptr_t without
-#              including <cstdint>, which older glibc headers supplied
-#              transitively. 15 errors, ~23 minutes in.
-#   sysroot=1  boost, CEF, ICU and OpenSSL all build against the ubuntu16
-#              sysroot — and then v8 is never FETCHED at all. base.py
-#              set_sysroot_env prepends the sysroot's /usr/bin to PATH and
-#              points LD_LIBRARY_PATH at its libraries, so depot_tools' own
-#              bootstrap runs under a 2016 toolchain and dies:
-#                  ./depot_tools/cipd_client_version.digests: No such file
-#                  Platform linux-amd64 is not supported by the CIPD bootstrap
-#                  Error: client not configured; see 'gclient config'
-#              v8_89.py then reaches os.chdir("v8") with no v8 directory.
+#   sysroot=0  fetch works (it did on 2026-09-07), boost builds via b2, and v8
+#              FAILS TO COMPILE on Ubuntu 24.04: src/base/macros.h uses
+#              intptr_t/uintptr_t without including <cstdint>, which older glibc
+#              headers supplied transitively. 15 errors. patch_v8_for_cstdint
+#              below addresses exactly this.
+#   sysroot=1  boost, CEF, ICU and OpenSSL build against the ubuntu16 sysroot,
+#              but the ubuntu16 gcc is a poor match for the rest of the
+#              toolchain and this path was never carried through.
 #
-# The sysroot is for COMPILING; it poisons the environment the FETCH needs. So
-# the default is back to 0 — the configuration that gets furthest and whose
-# failure is a specific, fixable compile error — and that error is fixed
-# directly by patch_v8_for_cstdint below.
+# NOT the reason for either: the v8 FETCH failures seen from 2026-09-08 onward.
+# Those were first blamed on the sysroot poisoning PATH/LD_LIBRARY_PATH, and
+# that was wrong — the identical failure occurs with sysroot=0. v8_89.py clones
+# depot_tools from HEAD, unpinned, and current HEAD cannot bootstrap:
+#
+#     python3_bin_reldir.txt not found. need to initialize depot_tools ...
+#     ./depot_tools/cipd_client_version.digests: No such file   (seen once)
+#     Error: client not configured; see 'gclient config'
+#
+# so no v8 is fetched and v8_89.py reaches os.chdir("v8") with nothing there.
+# That is upstream drift in a third-party dependency, not a setting here, and
+# pre-staging a pinned depot_tools does not help: v8_89.py calls
+# common_check_version("v8", "1", clean), and clean() deletes depot_tools
+# before the clone. See the PR discussion for the options.
 
 set -euo pipefail
 
@@ -190,11 +196,6 @@ for cand in "$BUILD_TOOLS"/tools/linux/qt_build/Qt-[0-9]*; do
   [ -d "$cand/gcc_64" ] && { QT_DIR="$cand"; break; }
 done
 echo "sysroot: $SYSROOT"
-
-# depot_tools updates itself to HEAD on first use, which would silently undo the
-# revision fetch_prebuilts.sh pinned it to. The pin exists because HEAD cannot
-# currently bootstrap CIPD, so letting it self-update reintroduces the failure.
-export DEPOT_TOOLS_UPDATE=0
 
 ./tools/linux/python3/bin/python3 ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
