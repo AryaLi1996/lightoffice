@@ -118,8 +118,16 @@ jobs:
           scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
           scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
 
+      # Compiling is Linux-only, so the preflight runs only there. Letting it
+      # run everywhere made build_desktop.sh's platform guard exit 2 on macOS
+      # and Windows, and continue-on-error turns that into a green job carrying
+      # a red "Process completed with exit code 2" annotation. A workflow that
+      # prints an error on every run for expected behaviour teaches people to
+      # ignore its errors, so the host limitation is expressed with an `if`
+      # rather than a non-zero exit.
       - name: Build preflight
         id: pre
+        if: matrix.os == 'linux'
         shell: bash
         continue-on-error: true
         env:
@@ -127,30 +135,71 @@ jobs:
         run: scripts/build_desktop.sh --check-only
 
       - name: Build the desktop editors
-        if: steps.pre.outcome == 'success'
+        if: matrix.os == 'linux' && steps.pre.outcome == 'success'
         shell: bash
         env:
           LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
         run: scripts/build_desktop.sh
 
       - name: Package
-        if: steps.pre.outcome == 'success'
+        if: matrix.os == 'linux' && steps.pre.outcome == 'success'
         shell: bash
         env:
           LIGHTOFFICE_SRC: ${{ runner.temp }}/onlyoffice-src
         run: scripts/package.sh --version "${{ needs.preflight.outputs.version }}"
 
-      - name: Report a skipped build
-        if: steps.pre.outcome != 'success'
+      # A build that ran and then produced nothing is a green check that means
+      # nothing. Only assert this where a build was actually attempted.
+      - name: Verify the build produced an installer
+        if: matrix.os == 'linux' && steps.pre.outcome == 'success'
+        shell: bash
         run: |
-          echo "::warning::${{ matrix.os }} build skipped — preflight reported missing dependencies"
-          {
-            echo "### ${{ matrix.os }}: build skipped"
-            echo "Preflight found unmet dependencies. See the 'Build preflight' step."
-          } >> "$GITHUB_STEP_SUMMARY"
+          shopt -s nullglob
+          found=(artifacts/WPS-Lite-*)
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "::error::the build and packaging steps succeeded but produced no installer in artifacts/"
+            exit 1
+          fi
+          printf 'produced: %s\n' "${found[@]}"
+
+      - name: Report a skipped build
+        if: matrix.os != 'linux' || steps.pre.outcome != 'success'
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" != "linux" ]; then
+            # Not a failure and not a missing dependency: there is no native
+            # recipe wired up for this host yet. Say which one it would need,
+            # so the gap is actionable rather than mysterious.
+            case "${{ matrix.os }}" in
+              macos)   needs="desktop-apps/macos (Xcode + codesign)" ;;
+              windows) needs="desktop-apps/win-linux/package/windows (MSVC + Inno Setup)" ;;
+              *)       needs="a native build recipe" ;;
+            esac
+            echo "::notice::${{ matrix.os }}: no installer — scripts/build_desktop.sh drives the Linux pipeline only"
+            {
+              echo "### ${{ matrix.os }}: no installer produced"
+              echo
+              echo "This is a known gap, not a failure. \`scripts/build_desktop.sh\` drives"
+              echo "the Linux pipeline (\`build_tools/tools/linux\`); producing a native"
+              echo "package here needs $needs."
+              echo
+              echo "The bootstrap, prebuilt-fetch and overlay steps DID run on this host,"
+              echo "so they still cover the overlay scripts cross-platform."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::linux build skipped — preflight reported unmet dependencies"
+            {
+              echo "### linux: build skipped"
+              echo "Preflight found unmet dependencies. See the 'Build preflight' step."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        # Only the Linux job can produce installers, and the step above already
+        # fails loudly if it built without producing one. Uploading from every
+        # host just to warn "no files found" is noise on a job that was never
+        # going to have any.
+        if: matrix.os == 'linux'
         with:
           name: installer-${{ matrix.os }}
           path: artifacts/*

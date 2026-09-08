@@ -9,22 +9,33 @@
 #
 # Usage: scripts/build_desktop.sh [--check-only] [--sysroot 0|1]
 #
-# --sysroot selects how v8 and the C++ modules are compiled, and it is not the
-# cosmetic flag it looks like. Upstream's configure.py normalises "0" to the
-# empty string, and scripts/core_common/modules/v8_89.py branches on that:
+# --sysroot selects how v8 and the C++ modules are compiled. Upstream's
+# configure.py normalises "0" to the empty string, and
+# scripts/core_common/modules/v8_89.py branches on that:
 #
 #   sysroot != ""  ->  use_sysroot=true,  is_clang=false, sysroot=<ubuntu16>
 #   sysroot == ""  ->  is_clang=true,     use_sysroot=false, use_custom_libcxx=false
 #
-# The second path compiles v8 against the HOST's glibc headers. On Ubuntu 24.04
-# that fails: v8's src/base/macros.h uses intptr_t/uintptr_t without including
-# <cstdint>, which older headers supplied transitively and current ones do not
-# ("unknown type name 'intptr_t'", 15 errors, ~23 minutes in). Upstream expects
-# the sysroot path on modern Ubuntu — v8_89.py carries an is_ubuntu_24_or_higher()
-# accommodation inside that branch and none in the other.
+# BOTH settings were tried in CI, and both break, in different places:
 #
-# So the default here is 1. Override with --sysroot 0 or LIGHTOFFICE_SYSROOT=0
-# on a host old enough not to need it, or if the sysroot download is blocked.
+#   sysroot=0  fetch works, boost builds via b2, and v8 then FAILS TO COMPILE on
+#              Ubuntu 24.04: src/base/macros.h uses intptr_t/uintptr_t without
+#              including <cstdint>, which older glibc headers supplied
+#              transitively. 15 errors, ~23 minutes in.
+#   sysroot=1  boost, CEF, ICU and OpenSSL all build against the ubuntu16
+#              sysroot — and then v8 is never FETCHED at all. base.py
+#              set_sysroot_env prepends the sysroot's /usr/bin to PATH and
+#              points LD_LIBRARY_PATH at its libraries, so depot_tools' own
+#              bootstrap runs under a 2016 toolchain and dies:
+#                  ./depot_tools/cipd_client_version.digests: No such file
+#                  Platform linux-amd64 is not supported by the CIPD bootstrap
+#                  Error: client not configured; see 'gclient config'
+#              v8_89.py then reaches os.chdir("v8") with no v8 directory.
+#
+# The sysroot is for COMPILING; it poisons the environment the FETCH needs. So
+# the default is back to 0 — the configuration that gets furthest and whose
+# failure is a specific, fixable compile error — and that error is fixed
+# directly by patch_v8_for_cstdint below.
 
 set -euo pipefail
 
@@ -32,7 +43,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 CHECK_ONLY=0
-SYSROOT="${LIGHTOFFICE_SYSROOT:-1}"
+SYSROOT="${LIGHTOFFICE_SYSROOT:-0}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1; shift ;;
@@ -142,7 +153,7 @@ if [ "$SYSROOT" = "1" ]; then
     esac
   fi
 else
-  ok "sysroot disabled (--sysroot 0): v8 will compile against host glibc headers"
+  ok "sysroot disabled (--sysroot 0): v8 compiles against host glibc headers; macros.h is patched for <cstdint> if that fails"
 fi
 
 # 6. Disk. A full build materialises boost, ICU, OpenSSL, CEF, v8 and all objects.
@@ -181,8 +192,37 @@ done
 echo "sysroot: $SYSROOT"
 ./tools/linux/python3/bin/python3 ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
+
+# v8 is fetched by make.py itself (v8_89.py, guarded by `if not is_dir("v8")`),
+# so there is no hook between the fetch and the compile. This is the hook: run
+# make.py, and if it fails with v8 present but unpatched, apply the one-line
+# include it needs and run once more. The second pass skips everything already
+# built, so it goes almost straight back to v8.
+V8_MACROS="$SRC/core/Common/3dParty/v8_89/v8/src/base/macros.h"
+
+patch_v8_for_cstdint() {
+  # Only claims success when it actually changed something, so a failure for any
+  # other reason is never silently retried.
+  [ -f "$V8_MACROS" ] || return 1
+  grep -q '#include <cstdint>' "$V8_MACROS" && return 1
+  # This v8 predates libstdc++ tightening its transitive includes: macros.h uses
+  # intptr_t/uintptr_t but includes nothing that declares them.
+  sed -i '1i #include <cstdint>  // LIGHTOFFICE: intptr_t/uintptr_t are used below but never declared' \
+    "$V8_MACROS"
+  return 0
+}
+
 ./tools/linux/python3/bin/python3 ./make.py
 rc=$?
+
+if [ "$rc" -ne 0 ]; then
+  if patch_v8_for_cstdint; then
+    echo
+    echo "make.py failed; v8's src/base/macros.h was missing <cstdint>. Patched it — retrying."
+    ./tools/linux/python3/bin/python3 ./make.py
+    rc=$?
+  fi
+fi
 
 BIN="$(find "$SRC/desktop-apps" "$SRC/../out" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)"
 echo
