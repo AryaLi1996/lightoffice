@@ -221,7 +221,11 @@ fi
 # make.py, and if it fails with v8 present but unpatched, apply the one-line
 # include it needs and run once more. The second pass skips everything already
 # built, so it goes almost straight back to v8.
-V8_BASE_DIR="$SRC/core/Common/3dParty/v8_89/v8/src/base"
+V8_ROOT="$SRC/core/Common/3dParty/v8_89/v8"
+# v8's own code. third_party/ is deliberately excluded: those are vendored
+# libraries with their own include hygiene, and every failure so far has been in
+# v8's own sources.
+V8_INCLUDE_ROOTS=("$V8_ROOT/src" "$V8_ROOT/include")
 
 # This v8 predates libstdc++ tightening its transitive includes: several headers
 # under src/base use fixed-width types while including nothing that declares
@@ -239,19 +243,31 @@ V8_BASE_DIR="$SRC/core/Common/3dParty/v8_89/v8/src/base"
 # mechanical instead: every header under src/base that USES one of these types
 # and does NOT already include a header declaring them gets the include. Both
 # conditions must hold, so it touches nothing that is already correct, and
-# <cstdint> is idempotent and self-guarding. It is deliberately scoped to
-# src/base, where every failure so far has been; widen it only if a failure
-# appears elsewhere.
+# <cstdint> is idempotent and self-guarding.
+#
+# The scan started at src/base and widened to all of v8's own sources when the
+# next failure landed outside it:
+#
+#     ../../src/inspector/v8-string-conversions.h:13:19:
+#       error: use of undeclared identifier 'uint16_t'
+#
+# Chasing this one directory at a time costs a 20-minute CI cycle each, so it
+# now covers src/ and include/ together. third_party/ stays out: those are
+# vendored libraries with their own hygiene, and no failure has come from there.
 patch_v8_for_cstdint() {
-  local patched=0 f
-  [ -d "$V8_BASE_DIR" ] || return 1
+  local patched=0 f root
+  local -a roots=()
+  for root in "${V8_INCLUDE_ROOTS[@]}"; do
+    [ -d "$root" ] && roots+=("$root")
+  done
+  [ "${#roots[@]}" -gt 0 ] || return 1
   while IFS= read -r f; do
     grep -qE '#include +<(cstdint|stdint\.h)>' "$f" && continue
     grep -qE '\b(u?int(8|16|32|64)_t|u?intptr_t)\b' "$f" || continue
     sed -i '1i #include <cstdint>  // LIGHTOFFICE: fixed-width types used below but never declared' "$f"
-    echo "  patched $(basename "$f")"
+    echo "  patched ${f#"$V8_ROOT/"}"
     patched=$((patched + 1))
-  done < <(find "$V8_BASE_DIR" -name '*.h' | sort)
+  done < <(find "${roots[@]}" -name '*.h' | sort)
   # Success only when something actually changed, so an unrelated failure is
   # never silently retried and the retry cannot loop.
   [ "$patched" -gt 0 ]
