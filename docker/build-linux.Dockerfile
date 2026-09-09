@@ -249,6 +249,38 @@ RUN { \
   printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
   } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 
+# Two things the image never kept, both of which cost a 90-minute cycle to ask
+# for again.
+#
+# The phase timings: this layer is the whole ONLYOFFICE build -- v8's 2929
+# targets, boost, cef, icu, openssl, core/, sdkjs, web-apps, desktop-sdk,
+# desktop-apps -- and it took ~88 minutes without ever saying which part. The
+# markers scripts/build_desktop.sh now prints go into the manifest, so
+# `docker run --rm IMAGE cat /etc/lightoffice-build-image` answers "where did
+# the time go" with no log download and no rebuild. That is the measurement any
+# argument about mold, ccache or -j has to start from.
+#
+# The full log: only a 200-line tail was retained, which is nothing for a build
+# this long and routinely cuts off above the actual error. BuildKit truncates
+# the layer's own output too, so the tail was all there was. Keeping the whole
+# thing gzipped costs a few MB against a 24 GB image.
+#
+# Both run here rather than in the build layer above on purpose: this layer is
+# seconds long, so changing it re-runs nothing expensive.
+RUN set -eu; \
+    mkdir -p /var/log/lightoffice; \
+    if [ -f /tmp/build.log ]; then \
+      gzip -c /tmp/build.log > /var/log/lightoffice/build.full.log.gz; \
+      tail -400 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
+      { echo "build_log_bytes=$(wc -c < /tmp/build.log)"; \
+        echo "build_phases:"; \
+        grep '^=== phase' /tmp/build.log | sed 's/^/  /' || echo "  (none recorded)"; \
+      } >> /etc/lightoffice-build-image; \
+    else \
+      echo "build_log=absent" >> /etc/lightoffice-build-image; \
+    fi; \
+    cat /etc/lightoffice-build-image
+
 # --- the gate, INSIDE the image ---------------------------------------------
 # This check used to live in build-image.yml, which had to `docker buildx build
 # --load` so it could `docker run` the image to read the manifest. --load exports
@@ -262,7 +294,37 @@ RUN { \
 # that fails this never gets pushed because the build itself fails. The layer is
 # a few lines of output, so BuildKit does not truncate it the way it truncates
 # the build layer.
-RUN set -eu;   manifest="$(cat /etc/lightoffice-build-image)";   fail=0;   case "$manifest" in     *libv8_monolith.a*) echo "gate: v8 present" ;;     *) echo "gate: ERROR image has no libv8_monolith.a -- the v8 build did not complete" >&2; fail=1 ;;   esac;   case "$manifest" in     *kernel*) echo "gate: core libraries present" ;;     *) echo "gate: ERROR image has no core/ libraries -- the build stopped before core" >&2; fail=1 ;;   esac;   if printf '%s\n' "$manifest" | grep -q '^MISSING '; then     echo "gate: ERROR image is missing paths a build needs:" >&2;     printf '%s\n' "$manifest" | grep '^MISSING ' >&2;     fail=1;   fi;   if [ "$fail" -ne 0 ]; then     echo "----- last 200 lines of the in-image build log -----" >&2;     cat /var/log/lightoffice/build.tail.log >&2 2>/dev/null || echo "(no build log captured)" >&2;     echo "----- end of build log -----" >&2;     exit 1;   fi;   echo "gate: image has everything a build needs"
+RUN set -eu; \
+    manifest="$(cat /etc/lightoffice-build-image)"; \
+    fail=0; \
+    case "$manifest" in \
+      *libv8_monolith.a*) echo "gate: v8 present" ;; \
+      *) echo "gate: ERROR image has no libv8_monolith.a -- the v8 build did not complete" >&2; fail=1 ;; \
+    esac; \
+    case "$manifest" in \
+      *kernel*) echo "gate: core libraries present" ;; \
+      *) echo "gate: ERROR image has no core/ libraries -- the build stopped before core" >&2; fail=1 ;; \
+    esac; \
+    if printf '%s\n' "$manifest" | grep -q '^MISSING '; then \
+      echo "gate: ERROR image is missing paths a build needs:" >&2; \
+      printf '%s\n' "$manifest" | grep '^MISSING ' >&2; \
+      fail=1; \
+    fi; \
+    case "$manifest" in \
+      *"build_desktop: completed"*) echo "gate: the in-image build completed" ;; \
+      *) \
+        echo "gate: WARNING the in-image build did NOT complete -- a consuming build will have to finish it" >&2; \
+        echo "----- retained build log -----" >&2; \
+        cat /var/log/lightoffice/build.tail.log >&2 2>/dev/null || echo "(no build log captured)" >&2; \
+        echo "----- end -----" >&2 ;; \
+    esac; \
+    if [ "$fail" -ne 0 ]; then \
+      echo "----- retained build log -----" >&2; \
+      cat /var/log/lightoffice/build.tail.log >&2 2>/dev/null || echo "(no build log captured)" >&2; \
+      echo "----- end -----" >&2; \
+      exit 1; \
+    fi; \
+    echo "gate: image has everything a build needs"
 
 WORKDIR /work
 CMD ["/bin/bash"]
