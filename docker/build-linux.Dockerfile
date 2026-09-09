@@ -134,9 +134,15 @@ RUN set -eux; \
     scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
     LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh > /tmp/build.log 2>&1 \
       && echo "build_desktop: completed" > /tmp/build.status \
-      || { echo "build_desktop: FAILED (expected at desktop-apps; see the tail below)" > /tmp/build.status; \
+      || { echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
            tail -40 /tmp/build.log; }; \
     cat /tmp/build.status; \
+    # Keep the log IN the image. Printing it here is not enough: GitHub
+    # truncates the BuildKit output for a layer this long, so the tail above
+    # never reaches the run log and the failure stays invisible. The verify
+    # step reads this file out of the image instead, where its output survives.
+    mkdir -p /var/log/lightoffice; \
+    tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
     rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
 
 # Record what got baked, so an image in a registry can be identified without
@@ -153,10 +159,20 @@ RUN { \
       cat /tmp/build.status 2>/dev/null || echo "build_desktop: status unknown"; \
       printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
       printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
-      for p in sdkjs/build/package.json web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
+      # sdkjs/build/build.py, deliberately: it is the file build_tools actually
+      # runs (scripts/build_js.py _run_build_py), and it exists only AFTER the
+      # sdkjs override in bootstrap.sh advances sdkjs to d8e4124. The tag's
+      # sdkjs (b2f0aa1) ships Gruntfile.js + package.json and no build.py; the
+      # override's commit ships build.py and neither of the others. PR #18
+      # changed the commit AND switched this check to package.json in one go,
+      # so the two halves contradicted and the gate blocked a CORRECT image.
+      # Check what the build needs, not what happens to be lying around.
+      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
         if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
         else printf 'MISSING %s\n' "$p"; fi; \
       done; \
+      printf 'sdkjs_head=%s\n' "$(git -C "$LIGHTOFFICE_PREBUILT_SRC/sdkjs" rev-parse HEAD 2>/dev/null || echo unknown)"; \
+      printf 'sdkjs_build_dir=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/sdkjs/build" 2>/dev/null | tr '\n' ' ')"; \
       printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
     } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 

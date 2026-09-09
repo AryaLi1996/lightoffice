@@ -143,7 +143,9 @@ jobs:
           # dying. Discard an incomplete tree and let bootstrap.sh do a clean
           # clone instead — slower than a good image, far faster than failing.
           incomplete=""
-          for p in sdkjs/build/package.json web-apps/build/Gruntfile.js core/Common \
+          # sdkjs/build/build.py is what build_tools runs, and it exists only
+          # after bootstrap.sh's sdkjs override. See docker/build-linux.Dockerfile.
+          for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common \
                    desktop-sdk desktop-apps/win-linux build_tools .git; do
             [ -e "/opt/lightoffice/src/$p" ] || incomplete="$incomplete $p"
           done
