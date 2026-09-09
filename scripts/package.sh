@@ -25,7 +25,27 @@ mkdir -p "$ART"
 OS="$(uname -s)"
 echo "packaging LightOffice $VERSION on $OS"
 
-BIN_DIR="$SRC/../out/linux_64/onlyoffice/desktopeditors"
+# Upstream deploys to build_tools/scripts/../out, i.e. $SRC/build_tools/out —
+# NOT $SRC/../out, which is what this used to assume. The log line is
+#   .../src/build_tools/scripts/../out/linux_64/onlyoffice/desktopeditors/...
+# That mistake was invisible for as long as no build reached packaging: the
+# script simply reported "skip .deb — no build output" and exited 0, so a
+# successful build would still have produced no installer. Candidates are
+# ordered most- to least-likely, with a search as the last resort.
+find_bin_dir() {
+  local c
+  for c in \
+    "$SRC/build_tools/out/linux_64/onlyoffice/desktopeditors" \
+    "$SRC/out/linux_64/onlyoffice/desktopeditors" \
+    "$SRC/../out/linux_64/onlyoffice/desktopeditors"; do
+    [ -x "$c/DesktopEditors" ] && { echo "$c"; return; }
+  done
+  local hit
+  hit="$(find "$SRC" -maxdepth 6 -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)"
+  [ -n "$hit" ] && dirname "$hit"
+}
+BIN_DIR="$(find_bin_dir)"
+[ -n "$BIN_DIR" ] || BIN_DIR="$SRC/build_tools/out/linux_64/onlyoffice/desktopeditors"
 BIN="$BIN_DIR/DesktopEditors"
 
 built=0
