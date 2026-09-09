@@ -66,12 +66,23 @@ jobs:
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
+      # buildx with a registry cache is the point of the layered Dockerfile:
+      # without --cache-from there is nothing to reuse and every rebuild redoes
+      # v8's 88 minutes, however little changed. mode=max caches intermediate
+      # layers too, not just the final one.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Build
         run: |
-          docker build \
+          cache="$(echo "ghcr.io/${{ github.repository }}-build" | tr '[:upper:]' '[:lower:]'):buildcache"
+          docker buildx build \
             -f docker/build-linux.Dockerfile \
             -t "${{ steps.meta.outputs.ref }}" \
             -t "${{ steps.meta.outputs.latest }}" \
+            --cache-from "type=registry,ref=$cache" \
+            --cache-to "type=registry,ref=$cache,mode=max" \
+            --load \
             .
 
       # An image that built but banked nothing is worse than no image: the

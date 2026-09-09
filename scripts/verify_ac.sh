@@ -38,17 +38,20 @@ DESK="$SRC/desktop-apps"
 find_binary() {
   local c
   for c in \
+    "$SRC/build_tools/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
     "$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
     "$SRC/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
     "$SRC/desktop-apps/win-linux/build/linux_64/DesktopEditors" \
     "$SRC/desktop-apps/win-linux/build/DesktopEditors"; do
     [ -x "$c" ] && { echo "$c"; return; }
   done
-  find "$SRC/desktop-apps" "$(dirname "$SRC")/out" -type f -name DesktopEditors \
-       -perm -u+x 2>/dev/null | head -1
+  # build_tools/out is where upstream actually deploys; it was missing from the
+  # list above and from the search, so a successful build still read as BLOCKED.
+  find "$SRC/build_tools/out" "$SRC/desktop-apps" "$(dirname "$SRC")/out" \
+       -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1
 }
 OUTBIN="$(find_binary)"
-[ -n "$OUTBIN" ] || OUTBIN="$(dirname "$SRC")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
+[ -n "$OUTBIN" ] || OUTBIN="$SRC/build_tools/out/linux_64/onlyoffice/desktopeditors/DesktopEditors"
 THEME="$WEB/apps/common/main/resources/themes/theme_lightwps.json"
 
 C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'; C_B=$'\033[34m'
@@ -206,7 +209,7 @@ fi
 SPLASH="$ROOT/overlay/branding/splash.png"
 if [ -f "$SPLASH" ] && command -v identify >/dev/null; then
   dim=$(identify -format "%wx%h" "$SPLASH" 2>/dev/null)
-  sz=$(stat -c%s "$SPLASH")
+  sz=$(file_bytes "$SPLASH")
   ck=$(cksum "$SPLASH" | awk '{print $1}')
   colours=$(identify -format "%k" "$SPLASH" 2>/dev/null)
   installed="$DESK/win-linux/res/lightoffice/splash.png"
@@ -549,7 +552,7 @@ fi
 # --- 安装包体积 ≤120MB ------------------------------------------------------
 deb=$(find "$ROOT/artifacts" -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.exe' -o -maxdepth 1 -name '*.dmg' 2>/dev/null | head -1)
 if [ -n "$deb" ] && [ -f "$deb" ]; then
-  bytes=$(stat -c%s "$deb")
+  bytes=$(file_bytes "$deb")
   mb=$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')
   if awk -v b="$bytes" 'BEGIN{exit !(b <= 120*1048576)}'; then
     record V.3 PASS "安装包体积 ${mb}MB ≤ 120MB" "$(basename "$deb")"

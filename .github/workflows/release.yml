@@ -178,6 +178,7 @@ jobs:
           scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
           scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
           scripts/patch_qt_compat.sh "$LIGHTOFFICE_SRC"
+          scripts/patch_v8_incremental.sh "$LIGHTOFFICE_SRC"
           scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
 
       # Roughly 55 of the desktop build's 61 minutes rebuild pinned dependencies
