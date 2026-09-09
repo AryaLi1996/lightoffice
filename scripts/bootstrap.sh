@@ -50,6 +50,65 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# sibling repositories
+# ---------------------------------------------------------------------------
+# DesktopEditors' submodules are not the whole story. build_tools' own
+# get_repositories() (scripts/base.py) lists what a `--module desktop` build
+# needs, and three of them are NOT submodules of DesktopEditors:
+#
+#   core-fonts             fonts copied into the package (deploy_desktop.py:103-108)
+#   document-templates     the blank new.docx/xlsx/pptx (deploy_desktop.py:97)
+#   onlyoffice.github.io   the sdkjs plugin store        (base.py:1547,1563)
+#
+# Missing them does not stop the compile — the build gets all the way through
+# v8, core, sdkjs, web-apps, desktop-sdk and desktop-apps — and then dies in
+# the deploy stage with
+#
+#   copy warning [file not exist]: .../core-fonts/ASC.ttf
+#   Directory not copied
+#
+# which is what an hour-long run cost to discover. They are content, not code,
+# so a failure to clone one is a warning rather than fatal: the build gets
+# further and says what is missing.
+#
+# Refs: core-fonts and onlyoffice.github.io have no release branches, so they
+# are pinned to a SHA. document-templates has no plain master/main at all — its
+# branches are main/default, main/en and so on — so the branch is named
+# explicitly rather than inheriting the default.
+clone_sibling() {
+  local name="$1" ref="$2" kind="$3" dir="$SRC/$1"
+  if [ -e "$dir/.git" ]; then
+    echo "· $name already present"
+    return 0
+  fi
+  local url="https://github.com/ONLYOFFICE/$name.git"
+  echo "cloning $name ($ref) -> $dir"
+  if [ "$kind" = branch ]; then
+    retry git clone --quiet --depth 1 --branch "$ref" "$url" "$dir" || {
+      echo "  WARNING: could not clone $name; the deploy stage will report it missing" >&2
+      return 0
+    }
+  else
+    mkdir -p "$dir"
+    if ! ( git -C "$dir" init --quiet \
+           && git -C "$dir" remote add origin "$url" \
+           && retry git -C "$dir" fetch --quiet --depth 1 origin "$ref" \
+           && git -C "$dir" checkout --quiet FETCH_HEAD ); then
+      echo "  WARNING: could not fetch $name at $ref; the deploy stage will report it missing" >&2
+      return 0
+    fi
+  fi
+  echo "· $name at $(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo '?')"
+}
+
+clone_sibling core-fonts \
+  "${LIGHTOFFICE_CORE_FONTS_REF:-7030c6681fb5bbed560675cb42422f91df15d5c9}" sha
+clone_sibling document-templates \
+  "${LIGHTOFFICE_DOC_TEMPLATES_REF:-main/default}" branch
+clone_sibling onlyoffice.github.io \
+  "${LIGHTOFFICE_PLUGIN_STORE_REF:-185c153acddfa47fbf703e60c2c9c7fa89d21374}" sha
+
+# ---------------------------------------------------------------------------
 # sdkjs override
 # ---------------------------------------------------------------------------
 # DesktopEditors v9.4.0 records sdkjs at b2f0aa1d (2026-03-23). build_tools —

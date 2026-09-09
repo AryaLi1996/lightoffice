@@ -167,7 +167,7 @@ RUN { \
       # changed the commit AND switched this check to package.json in one go,
       # so the two halves contradicted and the gate blocked a CORRECT image.
       # Check what the build needs, not what happens to be lying around.
-      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
+      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux core-fonts/ASC.ttf document-templates/new; do \
         if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
         else printf 'MISSING %s\n' "$p"; fi; \
       done; \
