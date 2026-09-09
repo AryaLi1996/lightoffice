@@ -13,3 +13,21 @@ SUBMODULE_DESKTOP_SDK=6bd2051287a496ac1504214caca69a5729625696
 SUBMODULE_DICTIONARIES=d3223bbb777883db66ac3cd249f71c6ebdc992c7
 SUBMODULE_SDKJS=b2f0aa1d5ca8c82e827ff3af6577d8edf913a2e7
 SUBMODULE_WEB_APPS=1c8ca9987876bada73c0bde21367da09c0e1ed83
+
+# DELIBERATE DEVIATION from UPSTREAM_TAG, applied by scripts/bootstrap.sh.
+# v9.4.0 records sdkjs at b2f0aa1d (2026-03-23), but build_tools — on master and
+# on release/v9.4.0 alike — builds sdkjs by running `python build.py` in
+# sdkjs/build, and that file does not exist at b2f0aa1d. It was added to sdkjs's
+# release/v9.4.0 branch later (present at d8e4124, 2026-05-26) and reached sdkjs
+# master only via a merge from that branch. The tag's submodule pointer is
+# therefore older than the build driver for the same release requires, so a
+# build from the tag exactly as recorded dies with
+#   python: can't open file '<src>/sdkjs/build/build.py'
+# This stays inside the v9.4.0 line. Set LIGHTOFFICE_SDKJS_REF= to disable it.
+# Both values below are read from scripts/bootstrap.sh, so editing one without
+# the other is caught by scripts/gen_version_lock.sh --check.
+SUBMODULE_SDKJS_OVERRIDE=d8e412430b8cb856edd46e15b18ad44814e307fb
+
+# build_tools is not a submodule, so nothing pinned it and bootstrap.sh cloned
+# master — an unpinned build driver, the same trap as unpinned depot_tools.
+BUILD_TOOLS_REF=release/v9.4.0
