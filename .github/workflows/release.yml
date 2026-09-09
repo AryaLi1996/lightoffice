@@ -83,6 +83,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Restore apt cache (Linux)
+        if: matrix.os == 'linux'
+        uses: actions/cache@v4
+        id: apt-cache
+        with:
+          path: /var/cache/apt/archives
+          key: apt-cache-${{ runner.os }}-${{ hashFiles('.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-cache-${{ runner.os }}-
+
+      - name: Restore prebuilt source cache (Linux)
+        if: matrix.os == 'linux'
+        uses: actions/cache@v4
+        id: src-cache
+        with:
+          path: /opt/lightoffice/src
+          key: lightoffice-src-${{ hashFiles('VERSION_LOCK', 'scripts/bootstrap.sh', 'scripts/fetch_prebuilts.sh', 'overlay/build/**') }}
+          restore-keys: |
+            lightoffice-src-
+
+      - name: Monitor disk space before cleanup (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          echo "=== Disk usage before cleanup ==="
+          df -h /
+          free -h
+
       - name: Install Linux build dependencies
         if: matrix.os == 'linux'
         run: |
@@ -100,6 +127,26 @@ jobs:
         if: matrix.os == 'linux'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc || true
 
+      - name: Monitor disk space after cleanup (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          echo "=== Disk usage after cleanup ==="
+          df -h /
+          available=$(df / | awk 'NR==2 {print $4}')
+          available_gb=$((available / 1024 / 1024))
+          if [ "$available_gb" -lt 10 ]; then
+            echo "::warning::Only ${available_gb}GB available — build may fail"
+          fi
+
+      - name: Log cache status
+        if: matrix.os == 'linux'
+        run: |
+          if [ "${{ steps.src-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "✅ Source cache HIT - skipping Docker image pull"
+          else
+            echo "❌ Source cache MISS - will restore from Docker image or build from scratch"
+          fi
+
       # ninja and make both key off absolute paths and mtimes, so the tree is
       # restored to the SAME path the image built it at (/opt/lightoffice/src).
       # Restoring elsewhere would rebuild everything and buy nothing.
@@ -109,7 +156,7 @@ jobs:
       # before. A missing cache must never be a broken pipeline.
       - id: prebuilt
         name: Restore prebuilt dependencies from the build image
-        if: matrix.os == 'linux'
+        if: matrix.os == 'linux' && steps.src-cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
           repo="$(echo "ghcr.io/${{ github.repository }}-build" | tr '[:upper:]' '[:lower:]')"
@@ -237,6 +284,19 @@ jobs:
             exit 1
           fi
           printf 'produced: %s\n' "${found[@]}"
+
+      - name: Emergency disk cleanup (Linux)
+        if: matrix.os == 'linux' && always()
+        shell: bash
+        run: |
+          if [ -d "/opt/lightoffice/src" ]; then
+            size_before=$(du -sh /opt/lightoffice/src | cut -f1)
+            find /opt/lightoffice/src -type f -name '*.o' -delete 2>/dev/null || true
+            find /opt/lightoffice/src -type f -name '.ninja_log' -delete 2>/dev/null || true
+            find /opt/lightoffice/src -type f -name '.ninja_deps' -delete 2>/dev/null || true
+            size_after=$(du -sh /opt/lightoffice/src | cut -f1)
+            echo "Intermediate cleanup: ${size_before} → ${size_after}"
+          fi
 
       - name: Report a skipped build
         if: matrix.os != 'linux' || steps.pre.outcome != 'success'
