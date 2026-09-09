@@ -48,17 +48,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # .github/workflows/release.yml), the second is what fetching and driving the
 # build needs.
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-      build-essential cmake p7zip-full autoconf libtool \
-      qtbase5-dev qtbase5-private-dev qttools5-dev libqt5svg5-dev \
-      qtmultimedia5-dev libqt5x11extras5-dev \
-      libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
-      libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
-      libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
-      libasound2-dev libatspi2.0-dev dpkg-dev \
-      git curl ca-certificates python3 python3-venv rsync file \
-      nodejs npm openjdk-11-jdk-headless \
- && npm install -g grunt-cli \
- && rm -rf /var/lib/apt/lists/*
+  build-essential cmake p7zip-full autoconf libtool \
+  qtbase5-dev qtbase5-private-dev qttools5-dev libqt5svg5-dev \
+  qtmultimedia5-dev libqt5x11extras5-dev \
+  libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
+  libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
+  libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
+  libasound2-dev libatspi2.0-dev dpkg-dev \
+  git curl ca-certificates python3 python3-venv rsync file \
+  nodejs npm openjdk-11-jdk-headless mold \
+  && npm install -g grunt-cli \
+  && rm -rf /var/lib/apt/lists/*
 
 # Why node, npm, grunt-cli and a JDK are here explicitly
 # ------------------------------------------------------
@@ -76,10 +76,10 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
 # Gruntfile, which would fail the image build for no reason. Node's major version
 # IS asserted, because deps.py requires >= 16 and silently reinstalls otherwise.
 RUN set -eux; \
-    node --version; npm --version; java -version; \
-    command -v grunt >/dev/null; \
-    major="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"; \
-    [ "$major" -ge 16 ] || { echo "node $major is below the 16 upstream requires" >&2; exit 1; }
+  node --version; npm --version; java -version; \
+  command -v grunt >/dev/null; \
+  major="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"; \
+  [ "$major" -ge 16 ] || { echo "node $major is below the 16 upstream requires" >&2; exit 1; }
 
 # Anchored on evidence rather than a guessed SHA: the last depot_tools revision
 # from before the day the v8 fetch was last known to work. Keep this in step
@@ -96,20 +96,20 @@ ENV LIGHTOFFICE_DEPOT_TOOLS_CACHE=/opt/depot_tools-cache
 # "python3_bin_reldir.txt not found" the moment self-update is disabled, so
 # fail the image build rather than ship a cache that cannot be used offline.
 RUN git clone --quiet "$DEPOT_TOOLS_URL" "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" \
- && pin="$(git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" rev-list -1 --before="$DEPOT_TOOLS_BEFORE" HEAD)" \
- && test -n "$pin" \
- && git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" checkout --quiet --detach "$pin" \
- && echo "depot_tools pinned to $pin" \
- && ( cd "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" && DEPOT_TOOLS_UPDATE=0 ./ensure_bootstrap ) \
- && test -f "$LIGHTOFFICE_DEPOT_TOOLS_CACHE/python3_bin_reldir.txt" \
- && echo "depot_tools bootstrapped: $(cat "$LIGHTOFFICE_DEPOT_TOOLS_CACHE/python3_bin_reldir.txt")"
+  && pin="$(git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" rev-list -1 --before="$DEPOT_TOOLS_BEFORE" HEAD)" \
+  && test -n "$pin" \
+  && git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" checkout --quiet --detach "$pin" \
+  && echo "depot_tools pinned to $pin" \
+  && ( cd "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" && DEPOT_TOOLS_UPDATE=0 ./ensure_bootstrap ) \
+  && test -f "$LIGHTOFFICE_DEPOT_TOOLS_CACHE/python3_bin_reldir.txt" \
+  && echo "depot_tools bootstrapped: $(cat "$LIGHTOFFICE_DEPOT_TOOLS_CACHE/python3_bin_reldir.txt")"
 
 # Record what got baked in, so an image in a registry can be identified without
 # running it: docker run --rm IMAGE cat /etc/lightoffice-build-image
 RUN { echo "base=ubuntu:24.04"; \
-      echo "depot_tools_pin=$(git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" rev-parse HEAD)"; \
-      echo "depot_tools_before=$DEPOT_TOOLS_BEFORE"; \
-    } > /etc/lightoffice-build-image
+  echo "depot_tools_pin=$(git -C "$LIGHTOFFICE_DEPOT_TOOLS_CACHE" rev-parse HEAD)"; \
+  echo "depot_tools_before=$DEPOT_TOOLS_BEFORE"; \
+  } > /etc/lightoffice-build-image
 
 # Self-update is off for every build from this image: it is precisely the drift
 # this image exists to eliminate.
@@ -150,12 +150,12 @@ ENV LIGHTOFFICE_PREBUILT_SRC=/opt/lightoffice/src
 COPY scripts/bootstrap.sh /opt/lightoffice/repo/scripts/
 COPY VERSION_LOCK /opt/lightoffice/repo/
 RUN set -eux; cd /opt/lightoffice/repo; \
-    scripts/bootstrap.sh "$LIGHTOFFICE_PREBUILT_SRC"
+  scripts/bootstrap.sh "$LIGHTOFFICE_PREBUILT_SRC"
 
 # --- stage 2: stage the prebuilts and the pinned depot_tools ----------------
 COPY scripts/fetch_prebuilts.sh /opt/lightoffice/repo/scripts/
 RUN set -eux; cd /opt/lightoffice/repo; \
-    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/fetch_prebuilts.sh
+  LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/fetch_prebuilts.sh
 
 # --- stage 3: patches that change how things COMPILE -----------------------
 # These must precede the build: apply_build_flags.sh alters compile flags, and
@@ -163,9 +163,9 @@ RUN set -eux; cd /opt/lightoffice/repo; \
 COPY scripts/apply_build_flags.sh scripts/patch_qt_compat.sh scripts/patch_v8_incremental.sh /opt/lightoffice/repo/scripts/
 COPY overlay/build/ /opt/lightoffice/repo/overlay/build/
 RUN set -eux; cd /opt/lightoffice/repo; \
-    scripts/apply_build_flags.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    scripts/patch_qt_compat.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    scripts/patch_v8_incremental.sh "$LIGHTOFFICE_PREBUILT_SRC"
+  scripts/apply_build_flags.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+  scripts/patch_qt_compat.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+  scripts/patch_v8_incremental.sh "$LIGHTOFFICE_PREBUILT_SRC"
 
 # --- stage 4: THE EXPENSIVE ONE (v8, core/, sdkjs, web-apps, desktop) ------
 # `|| true` because the build is expected to get as far as desktop-apps; what
@@ -175,14 +175,14 @@ RUN set -eux; cd /opt/lightoffice/repo; \
 # reaches the run log. build-image.yml reads the file out of the image instead.
 COPY scripts/build_desktop.sh /opt/lightoffice/repo/scripts/
 RUN set -eux; cd /opt/lightoffice/repo; \
-    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh > /tmp/build.log 2>&1 \
-      && echo "build_desktop: completed" > /tmp/build.status \
-      || { echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
-           tail -40 /tmp/build.log; }; \
-    cat /tmp/build.status; \
-    mkdir -p /var/log/lightoffice; \
-    tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
-    rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
+  LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh > /tmp/build.log 2>&1 \
+  && echo "build_desktop: completed" > /tmp/build.status \
+  || { echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
+  tail -40 /tmp/build.log; }; \
+  cat /tmp/build.status; \
+  mkdir -p /var/log/lightoffice; \
+  tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
+  rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
 
 # --- stage 5: content overlay, then an INCREMENTAL rebuild -----------------
 # Branding, theme and dictionary trimming touch no C++ at all, so putting them
@@ -195,28 +195,28 @@ COPY scripts/lib/ /opt/lightoffice/repo/scripts/lib/
 COPY overlay/ /opt/lightoffice/repo/overlay/
 COPY baseline/ /opt/lightoffice/repo/baseline/
 RUN set -eux; cd /opt/lightoffice/repo; \
-    scripts/apply_overlay.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh >> /tmp/build.log 2>&1 \
-      && echo "build_desktop: completed" > /tmp/build.status \
-      || echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
-    cat /tmp/build.status; \
-    tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
-    # Drop v8's intermediates. Safe ONLY because patch_v8_incremental.sh added
-    # the guard upstream already uses on Windows: without it ninja would find
-    # the objects gone and rebuild all 2929 targets. libv8_monolith.a and the
-    # generated headers under out.gn/*/gen stay — those are what doctrenderer
-    # links and includes. Everything else in out.gn is intermediate.
-    v8out="$LIGHTOFFICE_PREBUILT_SRC/core/Common/3dParty/v8_89/v8/out.gn/linux_64"; \
-    if [ -f "$v8out/obj/libv8_monolith.a" ]; then \
-      before=$(du -sm "$v8out" | cut -f1); \
-      find "$v8out/obj" -name '*.o' -delete; \
-      find "$v8out" -maxdepth 1 -name '.ninja_deps' -o -maxdepth 1 -name '.ninja_log' | xargs -r rm -f; \
-      after=$(du -sm "$v8out" | cut -f1); \
-      echo "v8 out.gn pruned: ${before} MiB -> ${after} MiB"; \
-    else \
-      echo "v8 out.gn NOT pruned: libv8_monolith.a absent"; \
-    fi
+  scripts/apply_overlay.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+  scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+  LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh >> /tmp/build.log 2>&1 \
+  && echo "build_desktop: completed" > /tmp/build.status \
+  || echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
+  cat /tmp/build.status; \
+  tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
+  # Drop v8's intermediates. Safe ONLY because patch_v8_incremental.sh added
+  # the guard upstream already uses on Windows: without it ninja would find
+  # the objects gone and rebuild all 2929 targets. libv8_monolith.a and the
+  # generated headers under out.gn/*/gen stay — those are what doctrenderer
+  # links and includes. Everything else in out.gn is intermediate.
+  v8out="$LIGHTOFFICE_PREBUILT_SRC/core/Common/3dParty/v8_89/v8/out.gn/linux_64"; \
+  if [ -f "$v8out/obj/libv8_monolith.a" ]; then \
+  before=$(du -sm "$v8out" | cut -f1); \
+  find "$v8out/obj" -name '*.o' -delete; \
+  find "$v8out" -maxdepth 1 -name '.ninja_deps' -o -maxdepth 1 -name '.ninja_log' | xargs -r rm -f; \
+  after=$(du -sm "$v8out" | cut -f1); \
+  echo "v8 out.gn pruned: ${before} MiB -> ${after} MiB"; \
+  else \
+  echo "v8 out.gn NOT pruned: libv8_monolith.a absent"; \
+  fi
 
 # Record what got baked, so an image in a registry can be identified without
 # running it: docker run --rm IMAGE cat /etc/lightoffice-build-image
@@ -228,26 +228,26 @@ RUN set -eux; cd /opt/lightoffice/repo; \
 # restoring it before dying on the missing file. A check that cannot fail for
 # the thing that breaks is not a check.
 RUN { \
-      printf 'prebuilt_src=%s\n' "$LIGHTOFFICE_PREBUILT_SRC"; \
-      cat /tmp/build.status 2>/dev/null || echo "build_desktop: status unknown"; \
-      printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
-      printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
-      # sdkjs/build/build.py, deliberately: it is the file build_tools actually
-      # runs (scripts/build_js.py _run_build_py), and it exists only AFTER the
-      # sdkjs override in bootstrap.sh advances sdkjs to d8e4124. The tag's
-      # sdkjs (b2f0aa1) ships Gruntfile.js + package.json and no build.py; the
-      # override's commit ships build.py and neither of the others. PR #18
-      # changed the commit AND switched this check to package.json in one go,
-      # so the two halves contradicted and the gate blocked a CORRECT image.
-      # Check what the build needs, not what happens to be lying around.
-      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux core-fonts/ASC.ttf document-templates/new; do \
-        if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
-        else printf 'MISSING %s\n' "$p"; fi; \
-      done; \
-      printf 'sdkjs_head=%s\n' "$(git -C "$LIGHTOFFICE_PREBUILT_SRC/sdkjs" rev-parse HEAD 2>/dev/null || echo unknown)"; \
-      printf 'sdkjs_build_dir=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/sdkjs/build" 2>/dev/null | tr '\n' ' ')"; \
-      printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
-    } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
+  printf 'prebuilt_src=%s\n' "$LIGHTOFFICE_PREBUILT_SRC"; \
+  cat /tmp/build.status 2>/dev/null || echo "build_desktop: status unknown"; \
+  printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
+  printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
+  # sdkjs/build/build.py, deliberately: it is the file build_tools actually
+  # runs (scripts/build_js.py _run_build_py), and it exists only AFTER the
+  # sdkjs override in bootstrap.sh advances sdkjs to d8e4124. The tag's
+  # sdkjs (b2f0aa1) ships Gruntfile.js + package.json and no build.py; the
+  # override's commit ships build.py and neither of the others. PR #18
+  # changed the commit AND switched this check to package.json in one go,
+  # so the two halves contradicted and the gate blocked a CORRECT image.
+  # Check what the build needs, not what happens to be lying around.
+  for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux core-fonts/ASC.ttf document-templates/new; do \
+  if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
+  else printf 'MISSING %s\n' "$p"; fi; \
+  done; \
+  printf 'sdkjs_head=%s\n' "$(git -C "$LIGHTOFFICE_PREBUILT_SRC/sdkjs" rev-parse HEAD 2>/dev/null || echo unknown)"; \
+  printf 'sdkjs_build_dir=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/sdkjs/build" 2>/dev/null | tr '\n' ' ')"; \
+  printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
+  } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 
 WORKDIR /work
 CMD ["/bin/bash"]

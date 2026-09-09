@@ -11,15 +11,42 @@
 # check anyway. Drive the three from a CI matrix, one runner per OS, and collect
 # the artifacts into artifacts/ before running scripts/verify_ac.sh.
 #
-# Usage: scripts/package.sh [--version X.Y.Z]
+# Usage: scripts/package.sh [--version X.Y.Z] [--compress-type gzip|xz|zstd] [--compress-level N]
+#
+# The default package pipeline used xz compression, which is slower but smaller.
+# For CI the fast path is gzip with a low compression level, trading a little
+# size for much shorter builder time. Keep the defaults conservative on local
+# builds but allow the workflow to opt into faster compression explicitly.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 ART="$ROOT/artifacts"
-VERSION="$(sed -n 's/.*--version \(.*\)/\1/p' <<<"${*:-}")"
-[ -n "$VERSION" ] || VERSION="1.0.0"
+VERSION="1.0.0"
+COMPRESS_TYPE="${LIGHTOFFICE_DEB_COMPRESS_TYPE:-gzip}"
+COMPRESS_LEVEL="${LIGHTOFFICE_DEB_COMPRESS_LEVEL:-1}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --version)
+      VERSION="$2"
+      shift 2
+      ;;
+    --compress-type)
+      COMPRESS_TYPE="$2"
+      shift 2
+      ;;
+    --compress-level)
+      COMPRESS_LEVEL="$2"
+      shift 2
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 2
+      ;;
+  esac
+done
 
 mkdir -p "$ART"
 OS="$(uname -s)"
@@ -90,7 +117,14 @@ Description: LightOffice Desktop Editors
  Lightweight on-premises office suite based on ONLYOFFICE Desktop Editors,
  configured for intranet collaboration.
 EOF
-    dpkg-deb --build --root-owner-group "$STAGE" "$ART/WPS-Lite-linux-amd64.deb"
+    case "$COMPRESS_TYPE" in
+      gzip|xz|zstd) ;;
+      *) echo "unsupported compression type: $COMPRESS_TYPE (expected gzip, xz, or zstd)" >&2; exit 2 ;;
+    esac
+    case "$COMPRESS_LEVEL" in
+      ''|*[!0-9]*) echo "invalid compression level: $COMPRESS_LEVEL" >&2; exit 2 ;;
+    esac
+    dpkg-deb --build --root-owner-group -Z"$COMPRESS_TYPE" -z"$COMPRESS_LEVEL" "$STAGE" "$ART/WPS-Lite-linux-amd64.deb"
     rm -rf "$STAGE"
     echo "  built $ART/WPS-Lite-linux-amd64.deb"
     built=$((built + 1))

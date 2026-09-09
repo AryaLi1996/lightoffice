@@ -1,0 +1,192 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore apt cache
+        uses: actions/cache@v4
+        id: apt-cache
+        with:
+          path: /var/cache/apt/archives
+          key: apt-cache-linux-${{ hashFiles('.github/workflows/build.yml', '.github/workflows/release.yml') }}
+          restore-keys: |
+            apt-cache-linux-
+
+      - name: Restore prebuilt source cache
+        uses: actions/cache@v4
+        id: src-cache
+        with:
+          path: /opt/lightoffice/src
+          key: lightoffice-src-${{ hashFiles('VERSION_LOCK', 'scripts/bootstrap.sh', 'scripts/fetch_prebuilts.sh', 'overlay/build/**') }}
+          restore-keys: |
+            lightoffice-src-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential cmake p7zip-full autoconf libtool \
+            qtbase5-dev qtbase5-private-dev qttools5-dev libqt5svg5-dev \
+            qtmultimedia5-dev libqt5x11extras5-dev \
+            libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
+            libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
+            libasound2-dev libatspi2.0-dev dpkg-dev mold ccache
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Linux image with BuildKit cache
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/build-linux.Dockerfile
+          push: false
+          tags: lightoffice:latest
+          cache-from: |
+            type=gha,scope=linux-docker-build
+            type=registry,ref=ghcr.io/${{ github.repository }}-build:buildcache
+          cache-to: |
+            type=gha,scope=linux-docker-build,mode=max
+            type=registry,ref=ghcr.io/${{ github.repository }}-build:buildcache,mode=max
+          outputs: type=docker,dest=/tmp/lightoffice-image.tar
+
+      - name: Load Docker image
+        run: docker load -i /tmp/lightoffice-image.tar
+
+      - name: Restore source tree if cache missed
+        if: steps.src-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          sudo mkdir -p /opt/lightoffice
+          docker run --rm -v /opt/lightoffice:/opt/lightoffice lightoffice:latest \
+            bash -lc 'if [ -d /opt/lightoffice/src ]; then echo "src restored from image"; else echo "src missing in image"; fi'
+
+      - name: Build desktop editors
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+          CCACHE_DIR: ~/.ccache
+          CC: ccache gcc
+          CXX: ccache g++
+          LDFLAGS: -fuse-ld=mold
+          CMAKE_EXE_LINKER_FLAGS: -fuse-ld=mold
+          CMAKE_SHARED_LINKER_FLAGS: -fuse-ld=mold
+        run: |
+          mkdir -p ~/.ccache
+          ccache --zero-stats
+          ccache --max-size=4G
+          scripts/bootstrap.sh "$LIGHTOFFICE_SRC"
+          scripts/fetch_prebuilts.sh || echo "::warning::prebuilt fetch incomplete; the build may not start"
+          scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
+          scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
+          scripts/patch_qt_compat.sh "$LIGHTOFFICE_SRC"
+          scripts/patch_v8_incremental.sh "$LIGHTOFFICE_SRC"
+          scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
+          scripts/build_desktop.sh
+          ccache --show-stats || true
+
+      - name: Package installers
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+          LIGHTOFFICE_DEB_COMPRESS_TYPE: gzip
+          LIGHTOFFICE_DEB_COMPRESS_LEVEL: 1
+        run: |
+          scripts/package.sh --version "${GITHUB_SHA::7}" --compress-type gzip --compress-level 1
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts/
+          retention-days: 30
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-2022
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: |
+            vcpkg-${{ runner.os }}-
+
+      - name: Build Windows
+        shell: bash
+        run: |
+          echo "Windows build step placeholder — add your native build command here"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: artifacts/
+          retention-days: 30
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-13
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache Homebrew
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Caches/Homebrew
+          key: homebrew-${{ runner.os }}-${{ hashFiles('**/Brewfile') }}
+          restore-keys: |
+            homebrew-${{ runner.os }}-
+
+      - name: Cache Xcode DerivedData
+        uses: actions/cache@v4
+        with:
+          path: /Users/runner/Library/Developer/Xcode/DerivedData
+          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/*.xcworkspace/**', 'VERSION_LOCK') }}
+          restore-keys: |
+            xcode-deriveddata-${{ runner.os }}-
+
+      - name: Build macOS
+        shell: bash
+        run: |
+          echo "macOS build step placeholder — add your native build command here"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: artifacts/
+          retention-days: 30
