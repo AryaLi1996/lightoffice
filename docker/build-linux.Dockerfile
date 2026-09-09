@@ -247,6 +247,16 @@ RUN { \
   printf 'sdkjs_head=%s\n' "$(git -C "$LIGHTOFFICE_PREBUILT_SRC/sdkjs" rev-parse HEAD 2>/dev/null || echo unknown)"; \
   printf 'sdkjs_build_dir=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/sdkjs/build" 2>/dev/null | tr '\n' ' ')"; \
   printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
+  # The question the manifest could not answer: is this image PACKAGEABLE?
+  # "build_desktop: completed" means make.py returned 0, and deploy is its last
+  # stage -- but nothing recorded whether deploy actually produced the tree
+  # package.sh needs. Upstream deploys to build_tools/out (build_tools/scripts
+  # resolves its output as scripts/../out), which is where package.sh and
+  # verify_ac.sh look since 57b3204. Recording it here means a consuming build
+  # knows before it starts whether it has to finish the build or can go straight
+  # to packaging.
+  printf 'deployed_binary=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC/build_tools/out" -type f -name DesktopEditors -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
+  printf 'deployed_tree=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC/build_tools/out" 2>/dev/null | cut -f1)"; \
   } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 
 # Two things the image never kept, both of which cost a 90-minute cycle to ask
@@ -311,7 +321,12 @@ RUN set -eu; \
       fail=1; \
     fi; \
     case "$manifest" in \
-      *"build_desktop: completed"*) echo "gate: the in-image build completed" ;; \
+      *"build_desktop: completed"*) \
+        echo "gate: the in-image build completed"; \
+        case "$manifest" in \
+          *"deployed_binary=/"*) echo "gate: deploy produced a binary -- this image may be packageable as-is" ;; \
+          *) echo "gate: NOTE make.py returned 0 but no DesktopEditors under build_tools/out; a consuming build must still deploy" ;; \
+        esac ;; \
       *) \
         echo "gate: WARNING the in-image build did NOT complete -- a consuming build will have to finish it" >&2; \
         echo "----- retained build log -----" >&2; \
