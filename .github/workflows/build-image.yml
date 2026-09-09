@@ -73,73 +73,41 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build
+      # --push, NOT --load. --load exports the whole ~24 GB image to a tarball
+      # and imports it into the local daemon, so the runner has to hold it three
+      # times over: BuildKit cache, tar, daemon. Run 34363351869 built for 2h05m
+      # and then died with "no space left on device" 13.6 GB into a 14.43 GB
+      # layer, with "Free space left: 1 MB". Pushing streams the layers straight
+      # to the registry and never materialises the image on disk.
+      #
+      # The verification that used to require --load now runs as the last RUN in
+      # the Dockerfile, so an image that is missing anything the build needs
+      # fails the build and is never pushed at all.
+      - name: Build and push
         run: |
           cache="$(echo "ghcr.io/${{ github.repository }}-build" | tr '[:upper:]' '[:lower:]'):buildcache"
+          df -h / | tail -1
           docker buildx build \
             -f docker/build-linux.Dockerfile \
             -t "${{ steps.meta.outputs.ref }}" \
             -t "${{ steps.meta.outputs.latest }}" \
             --cache-from "type=registry,ref=$cache" \
             --cache-to "type=registry,ref=$cache,mode=max" \
-            --load \
+            --push \
             .
+          df -h / | tail -1
 
-      # An image that built but banked nothing is worse than no image: the
-      # release workflow would pull several GB and then rebuild v8 anyway. Fail
-      # here instead, where the cause is visible.
-      # An image that built but banked nothing is worse than no image: a release
-      # run pulls several GB and then rebuilds anyway, or dies part way in.
-      #
-      # The first version of this checked only libv8_monolith.a and core/'s
-      # libraries. Both are produced BEFORE sdkjs, and the Dockerfile tolerates
-      # a build failure on purpose (it is expected to stop in desktop-apps), so
-      # an image missing sdkjs passed verification, published, and cost a
-      # release run 23 minutes of restore before it died on
-      # "sdkjs/build/build.py: No such file or directory". Any MISSING line in
-      # the manifest now fails the publish.
-      - name: Verify the image actually banked what a build needs
+      # buildx already pushed. The image is deliberately NOT present locally, so
+      # report from the registry rather than `docker image inspect`.
+      - name: Report what was published
         run: |
-          manifest=$(docker run --rm "${{ steps.meta.outputs.ref }}" cat /etc/lightoffice-build-image)
-          echo "$manifest"
-          # The Dockerfile keeps the build log inside the image because GitHub
-          # truncates the BuildKit output for a layer that long. Surface it here,
-          # where the output actually survives, whenever the build did not
-          # complete — otherwise the reason stays invisible for another 90 min.
-          case "$manifest" in
-            *"build_desktop: FAILED"*)
-              echo "----- last 200 lines of the in-image build log -----"
-              docker run --rm "${{ steps.meta.outputs.ref }}" \
-                sh -c 'cat /var/log/lightoffice/build.tail.log 2>/dev/null || echo "(no build log captured)"'
-              echo "----- end of build log -----" ;;
-          esac
-
-          fail=0
-          case "$manifest" in
-            *libv8_monolith.a*) echo "v8 present" ;;
-            *) echo "::error::image has no libv8_monolith.a — the v8 build did not complete"; fail=1 ;;
-          esac
-          case "$manifest" in
-            *kernel*) echo "core libraries present" ;;
-            *) echo "::error::image has no core/ libraries — the build stopped before core"; fail=1 ;;
-          esac
-          if missing=$(printf '%s\n' "$manifest" | grep '^MISSING '); then
-            echo "::error::image is missing paths a build needs:"
-            printf '%s\n' "$missing"
-            fail=1
-          fi
-          [ "$fail" -eq 0 ] || exit 1
-
-      - name: Push
-        run: |
-          docker push "${{ steps.meta.outputs.ref }}"
-          docker push "${{ steps.meta.outputs.latest }}"
           {
             echo "### Image published"
             echo
             echo '```'
             echo "${{ steps.meta.outputs.ref }}"
             echo '```'
-            bytes=$(docker image inspect "${{ steps.meta.outputs.ref }}" --format '{{.Size}}')
-            echo "size: $(( bytes / 1048576 )) MiB"
+            echo
+            docker buildx imagetools inspect "${{ steps.meta.outputs.ref }}" \
+              || echo "(could not inspect the pushed image)"
           } >> "$GITHUB_STEP_SUMMARY"

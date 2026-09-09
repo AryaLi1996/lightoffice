@@ -263,8 +263,27 @@ else
   echo "depot_tools: not staged here; leaving its self-update enabled so it can bootstrap itself"
 fi
 
-./tools/linux/python3/bin/python3 ./configure.py \
+# Phase markers. Run 34370859926 spent 31m39s in this script and reported no
+# breakdown at all, so "which stage is slow" could only be guessed at. Combined
+# with the -u above and the timestamp GitHub already puts on every log line,
+# these make the answer readable straight out of the run log -- which is what
+# any decision about ccache, mold or -j has to be argued from. Nothing here
+# changes what gets compiled.
+PHASE_NAME=""
+PHASE_T0=$SECONDS
+phase_begin() {
+  PHASE_NAME="$1"
+  PHASE_T0=$SECONDS
+  printf '=== phase begin: %s\n' "$1"
+}
+phase_end() {
+  printf '=== phase end:   %s (%ds)\n' "${PHASE_NAME:-?}" "$((SECONDS - PHASE_T0))"
+}
+
+phase_begin configure
+./tools/linux/python3/bin/python3 -u ./configure.py \
     --branch master --module desktop --sysroot "$SYSROOT" --update 0 --qt-dir "$QT_DIR"
+phase_end
 
 # v8 is fetched by make.py itself (v8_89.py, guarded by `if not is_dir("v8")`),
 # so there is no hook between the fetch and the compile. This is the hook: run
@@ -371,7 +390,7 @@ apply_v8_remedies() {
 run_make() {
   local status
   set +e
-  ./tools/linux/python3/bin/python3 ./make.py
+  ./tools/linux/python3/bin/python3 -u ./make.py
   status=$?
   set -e
   return "$status"
@@ -382,7 +401,9 @@ run_make() {
 # exactly once. max_attempts is a backstop; the real bound is that every remedy
 # reports "no change" the second time it is asked.
 rc=0
+phase_begin "make.py (attempt 1)"
 run_make || rc=$?
+phase_end
 
 attempt=1
 max_attempts=4
@@ -394,10 +415,29 @@ while [ "$rc" -ne 0 ] && [ "$attempt" -lt "$max_attempts" ]; do
   echo
   echo "make.py failed; applied the v8 remedies above — retrying (attempt $attempt/$max_attempts)."
   rc=0
+  phase_begin "make.py (attempt $attempt)"
   run_make || rc=$?
+  phase_end
 done
 
-BIN="$(find "$SRC/desktop-apps" "$SRC/../out" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)"
+# Where upstream actually deploys the built application is $SRC/build_tools/out
+# — build_tools/scripts resolves its output as scripts/../out, and the deploy log
+# from run 34349283232 prints that path directly. 57b3204 corrected package.sh
+# and verify_ac.sh to it; this third caller was missed.
+#
+# The find is also no longer allowed to end the script. It named
+# "$SRC/../out", a directory that has never existed, so find exited 1, pipefail
+# propagated it, and set -e killed the script AT THIS ASSIGNMENT — before the
+# "build exit code" line below could report anything. That is how release run
+# 34370859926 failed: 31m39s of build, exit 1, no diagnostics, Package skipped,
+# and no way to tell from the log whether make.py had actually succeeded.
+BIN=""
+for outdir in "$SRC/build_tools/out" "$SRC/desktop-apps" "$SRC/../out"; do
+  if [ -d "$outdir" ]; then
+    BIN="$(find "$outdir" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1 || true)"
+    if [ -n "$BIN" ]; then break; fi
+  fi
+done
 echo
 echo "build exit code: $rc"
 if [ -n "$BIN" ] && [ -x "$BIN" ]; then
