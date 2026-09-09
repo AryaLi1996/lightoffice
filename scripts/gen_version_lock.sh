@@ -47,6 +47,24 @@ sha="$(git -C "$SRC" rev-parse HEAD)"
   echo "# submodule SHAs recorded by that tag"
   git -C "$SRC" submodule status | awk '{gsub(/^[ +-]/,"",$1); print "SUBMODULE_" toupper($2) "=" $1}' \
     | tr '-' '_' | sed 's/SUBMODULE_\(.*\)=/SUBMODULE_\1=/'
+
+  # These two are POLICY rather than state read from the checkout, but they
+  # decide what actually gets built, so they belong in the lock.
+  #
+  # They are read from bootstrap.sh, NOT carried forward from VERSION_LOCK. An
+  # earlier version did carry them forward, which made them self-fulfilling:
+  # --check compared the file against itself and could never fail. Reading the
+  # defaults out of bootstrap.sh means editing one without the other is caught,
+  # which is the whole point of a lock file.
+  policy() {
+    local var="$1" out
+    out="$(sed -n "s/^${var}=\"\${[A-Z_]*:-\(.*\)}\"$/\1/p" "$ROOT/scripts/bootstrap.sh" | head -1)"
+    [ -n "$out" ] || out="UNREADABLE-FROM-bootstrap.sh"
+    echo "$out"
+  }
+  echo
+  echo "SUBMODULE_SDKJS_OVERRIDE=$(policy SDKJS_REF)"
+  echo "BUILD_TOOLS_REF=$(policy TOOLS_REF)"
 } > "$OUT"
 
 if [ "$CHECK" -eq 1 ]; then

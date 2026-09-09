@@ -153,7 +153,7 @@ RUN { \
       cat /tmp/build.status 2>/dev/null || echo "build_desktop: status unknown"; \
       printf 'v8_monolith=%s\n' "$(find "$LIGHTOFFICE_PREBUILT_SRC" -name 'libv8_monolith.a' -printf '%p (%s bytes)' 2>/dev/null | head -1)"; \
       printf 'core_libs=%s\n' "$(ls "$LIGHTOFFICE_PREBUILT_SRC/core/build/lib/linux_64" 2>/dev/null | tr '\n' ' ')"; \
-      for p in sdkjs/build/build.py web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
+      for p in sdkjs/build/package.json web-apps/build/Gruntfile.js core/Common desktop-sdk desktop-apps/win-linux; do \
         if [ -e "$LIGHTOFFICE_PREBUILT_SRC/$p" ]; then printf 'have %s\n' "$p"; \
         else printf 'MISSING %s\n' "$p"; fi; \
       done; \
