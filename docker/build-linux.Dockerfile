@@ -249,5 +249,20 @@ RUN { \
   printf 'prebuilt_size=%s\n' "$(du -sh "$LIGHTOFFICE_PREBUILT_SRC" 2>/dev/null | cut -f1)"; \
   } >> /etc/lightoffice-build-image; cat /etc/lightoffice-build-image
 
+# --- the gate, INSIDE the image ---------------------------------------------
+# This check used to live in build-image.yml, which had to `docker buildx build
+# --load` so it could `docker run` the image to read the manifest. --load exports
+# the whole ~24 GB image to a tarball and imports it into the daemon, so the
+# runner held it three times over -- BuildKit cache, tar, daemon. Run
+# 34363351869 spent 2h05m building and then died with "no space left on device"
+# at "Free space left: 1 MB", 13.6 GB into a 14.43 GB layer.
+#
+# Running the same assertions here removes the reason to materialise the image
+# locally at all: build-image.yml can push straight to the registry, and an image
+# that fails this never gets pushed because the build itself fails. The layer is
+# a few lines of output, so BuildKit does not truncate it the way it truncates
+# the build layer.
+RUN set -eu;   manifest="$(cat /etc/lightoffice-build-image)";   fail=0;   case "$manifest" in     *libv8_monolith.a*) echo "gate: v8 present" ;;     *) echo "gate: ERROR image has no libv8_monolith.a -- the v8 build did not complete" >&2; fail=1 ;;   esac;   case "$manifest" in     *kernel*) echo "gate: core libraries present" ;;     *) echo "gate: ERROR image has no core/ libraries -- the build stopped before core" >&2; fail=1 ;;   esac;   if printf '%s\n' "$manifest" | grep -q '^MISSING '; then     echo "gate: ERROR image is missing paths a build needs:" >&2;     printf '%s\n' "$manifest" | grep '^MISSING ' >&2;     fail=1;   fi;   if [ "$fail" -ne 0 ]; then     echo "----- last 200 lines of the in-image build log -----" >&2;     cat /var/log/lightoffice/build.tail.log >&2 2>/dev/null || echo "(no build log captured)" >&2;     echo "----- end of build log -----" >&2;     exit 1;   fi;   echo "gate: image has everything a build needs"
+
 WORKDIR /work
 CMD ["/bin/bash"]

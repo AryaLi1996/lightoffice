@@ -16,9 +16,14 @@ on:
         description: "Publish a GitHub Release for the built artifacts"
         type: boolean
         default: false
+      build_run_id:
+        description: "Build Artifacts run to publish from (default: newest successful)"
+        required: false
+        default: ""
 
 permissions:
   contents: write
+  actions: read
 
 env:
   LIGHTOFFICE_VERSION: ${{ github.event.inputs.version || github.ref_name }}
@@ -48,11 +53,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # actions/download-artifact only sees artifacts from its OWN run unless it
+      # is given a run-id and a token. The installers are produced by build.yml,
+      # a different workflow and therefore a different run, so without this the
+      # download silently yields nothing and the release publishes an empty
+      # directory. Resolve the newest successful build.yml run on this ref and
+      # pull from that.
+      - id: src
+        name: Find the build run to publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id="${{ github.event.inputs.build_run_id }}"
+          if [ -z "$run_id" ]; then
+            run_id=$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow build.yml \
+              --status success \
+              --limit 1 \
+              --json databaseId --jq '.[0].databaseId')
+          fi
+          if [ -z "$run_id" ] || [ "$run_id" = "null" ]; then
+            echo "::error::no successful build.yml run to publish from — run Build Artifacts first"
+            exit 1
+          fi
+          echo "publishing artifacts from build.yml run $run_id"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           pattern: '*-artifacts'
           merge-multiple: true
+          run-id: ${{ steps.src.outputs.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Verify installers
         id: check
