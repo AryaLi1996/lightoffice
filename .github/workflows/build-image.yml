@@ -91,6 +91,18 @@ jobs:
         run: |
           manifest=$(docker run --rm "${{ steps.meta.outputs.ref }}" cat /etc/lightoffice-build-image)
           echo "$manifest"
+          # The Dockerfile keeps the build log inside the image because GitHub
+          # truncates the BuildKit output for a layer that long. Surface it here,
+          # where the output actually survives, whenever the build did not
+          # complete — otherwise the reason stays invisible for another 90 min.
+          case "$manifest" in
+            *"build_desktop: FAILED"*)
+              echo "----- last 200 lines of the in-image build log -----"
+              docker run --rm "${{ steps.meta.outputs.ref }}" \
+                sh -c 'cat /var/log/lightoffice/build.tail.log 2>/dev/null || echo "(no build log captured)"'
+              echo "----- end of build log -----" ;;
+          esac
+
           fail=0
           case "$manifest" in
             *libv8_monolith.a*) echo "v8 present" ;;
