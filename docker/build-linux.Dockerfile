@@ -56,7 +56,30 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
       libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
       libasound2-dev libatspi2.0-dev dpkg-dev \
       git curl ca-certificates python3 python3-venv rsync file \
+      nodejs npm openjdk-11-jdk-headless \
+ && npm install -g grunt-cli \
  && rm -rf /var/lib/apt/lists/*
+
+# Why node, npm, grunt-cli and a JDK are here explicitly
+# ------------------------------------------------------
+# Upstream installs these itself, in build_tools/tools/linux/deps.py: nodejs
+# (>= 16, else it adds the nodesource repo), npm, grunt-cli, and openjdk-11 for
+# the closure compiler. But fetch_prebuilts.sh touches `packages_complete` to
+# skip deps.py's ~40-package apt run, which skips those too.
+#
+# On a GitHub runner that goes unnoticed because node is preinstalled there. In
+# THIS image nothing provides it, so the JS stage (sdkjs and web-apps, both
+# driven by grunt) could never run: the image reported "build_desktop: FAILED"
+# and banked no JS output at all, which is why every release run rebuilt
+# web-apps from scratch no matter what the mtimes said.
+# Presence, not version output: `grunt --version` exits non-zero without a local
+# Gruntfile, which would fail the image build for no reason. Node's major version
+# IS asserted, because deps.py requires >= 16 and silently reinstalls otherwise.
+RUN set -eux; \
+    node --version; npm --version; java -version; \
+    command -v grunt >/dev/null; \
+    major="$(node --version | sed 's/^v\([0-9]*\).*/\1/')"; \
+    [ "$major" -ge 16 ] || { echo "node $major is below the 16 upstream requires" >&2; exit 1; }
 
 # Anchored on evidence rather than a guessed SHA: the last depot_tools revision
 # from before the day the v8 fetch was last known to work. Keep this in step
@@ -107,43 +130,93 @@ ENV DEPOT_TOOLS_UPDATE=0
 # path rather than to $RUNNER_TEMP. Change it in one place only.
 ENV LIGHTOFFICE_PREBUILT_SRC=/opt/lightoffice/src
 
-# The build scripts, not the whole repo: this layer should not be invalidated
-# by a docs or test change.
-COPY scripts/ /opt/lightoffice/repo/scripts/
-COPY overlay/ /opt/lightoffice/repo/overlay/
-COPY baseline/ /opt/lightoffice/repo/baseline/
-COPY VERSION_LOCK /opt/lightoffice/repo/
-
-# Bootstrap the pinned upstream tree, stage the prebuilts, and build. The build
-# is expected to get as far as desktop-apps; what we are banking is everything
-# before it. `|| true` because a failure IN desktop-apps still leaves v8, the
-# 3rd-party deps and core/ built, which is exactly what we came for — and the
-# release workflow rebuilds and reports that part properly anyway.
+# ---------------------------------------------------------------------------
+# Layered on purpose
+# ---------------------------------------------------------------------------
+# This used to be ONE RUN doing everything, which meant nothing cached: a
+# one-line change to the branding overlay rebuilt v8 from scratch, 88 minutes
+# of it. The stages below are ordered cheapest-and-most-stable first, and each
+# COPYs only the files it actually needs, so BuildKit can reuse everything
+# above the thing that changed. With --cache-from/--cache-to against GHCR (see
+# build-image.yml) a rebuild that does not touch v8's inputs skips it entirely.
 #
-# The git metadata STAYS. bootstrap.sh decides whether a tree already exists by
-# testing "$SRC/.git", and runs `git submodule status` over it; strip it and the
-# release workflow tries to clone into a non-empty directory and fails. Only
-# openssl's generated HTML docs are pruned, which nothing reads.
-RUN set -eux; \
-    cd /opt/lightoffice/repo; \
-    scripts/bootstrap.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/fetch_prebuilts.sh; \
-    scripts/apply_overlay.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+# The ordering that matters most: the CONTENT overlay (branding, theme,
+# dictionaries) runs AFTER the expensive build, because it does not affect v8
+# or core/ at all — only the JS and resource layers. Build-affecting patches
+# (compile flags, Qt compatibility) must stay BEFORE it, or every object would
+# be rebuilt.
+
+# --- stage 1: bootstrap the pinned upstream tree (slow, changes rarely) -----
+COPY scripts/bootstrap.sh /opt/lightoffice/repo/scripts/
+COPY VERSION_LOCK /opt/lightoffice/repo/
+RUN set -eux; cd /opt/lightoffice/repo; \
+    scripts/bootstrap.sh "$LIGHTOFFICE_PREBUILT_SRC"
+
+# --- stage 2: stage the prebuilts and the pinned depot_tools ----------------
+COPY scripts/fetch_prebuilts.sh /opt/lightoffice/repo/scripts/
+RUN set -eux; cd /opt/lightoffice/repo; \
+    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/fetch_prebuilts.sh
+
+# --- stage 3: patches that change how things COMPILE -----------------------
+# These must precede the build: apply_build_flags.sh alters compile flags, and
+# patch_qt_compat.sh fixes sources that will not compile against system Qt.
+COPY scripts/apply_build_flags.sh scripts/patch_qt_compat.sh scripts/patch_v8_incremental.sh /opt/lightoffice/repo/scripts/
+COPY overlay/build/ /opt/lightoffice/repo/overlay/build/
+RUN set -eux; cd /opt/lightoffice/repo; \
     scripts/apply_build_flags.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
     scripts/patch_qt_compat.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
-    scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    scripts/patch_v8_incremental.sh "$LIGHTOFFICE_PREBUILT_SRC"
+
+# --- stage 4: THE EXPENSIVE ONE (v8, core/, sdkjs, web-apps, desktop) ------
+# `|| true` because the build is expected to get as far as desktop-apps; what
+# we are banking is everything before it, and the release workflow rebuilds and
+# reports that part properly. The log is kept IN the image: GitHub truncates
+# BuildKit output for a layer this long, so printing the tail here never
+# reaches the run log. build-image.yml reads the file out of the image instead.
+COPY scripts/build_desktop.sh /opt/lightoffice/repo/scripts/
+RUN set -eux; cd /opt/lightoffice/repo; \
     LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh > /tmp/build.log 2>&1 \
       && echo "build_desktop: completed" > /tmp/build.status \
       || { echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
            tail -40 /tmp/build.log; }; \
     cat /tmp/build.status; \
-    # Keep the log IN the image. Printing it here is not enough: GitHub
-    # truncates the BuildKit output for a layer this long, so the tail above
-    # never reaches the run log and the failure stays invisible. The verify
-    # step reads this file out of the image instead, where its output survives.
     mkdir -p /var/log/lightoffice; \
     tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
     rm -rf "$LIGHTOFFICE_PREBUILT_SRC"/core/Common/3dParty/openssl/build/*/share/doc || true
+
+# --- stage 5: content overlay, then an INCREMENTAL rebuild -----------------
+# Branding, theme and dictionary trimming touch no C++ at all, so putting them
+# after stage 4 means changing a logo re-runs only this layer instead of v8.
+# The rebuild is incremental: make and ninja find everything above unchanged.
+COPY scripts/apply_overlay.sh scripts/trim_dictionaries.sh /opt/lightoffice/repo/scripts/
+# trim_dictionaries.sh sources scripts/lib/portable.sh, so the directory has
+# to keep its name — a bare `scripts/lib/` source would copy its CONTENTS.
+COPY scripts/lib/ /opt/lightoffice/repo/scripts/lib/
+COPY overlay/ /opt/lightoffice/repo/overlay/
+COPY baseline/ /opt/lightoffice/repo/baseline/
+RUN set -eux; cd /opt/lightoffice/repo; \
+    scripts/apply_overlay.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    scripts/trim_dictionaries.sh "$LIGHTOFFICE_PREBUILT_SRC"; \
+    LIGHTOFFICE_SRC="$LIGHTOFFICE_PREBUILT_SRC" scripts/build_desktop.sh >> /tmp/build.log 2>&1 \
+      && echo "build_desktop: completed" > /tmp/build.status \
+      || echo "build_desktop: FAILED (expected at desktop-apps)" > /tmp/build.status; \
+    cat /tmp/build.status; \
+    tail -200 /tmp/build.log > /var/log/lightoffice/build.tail.log; \
+    # Drop v8's intermediates. Safe ONLY because patch_v8_incremental.sh added
+    # the guard upstream already uses on Windows: without it ninja would find
+    # the objects gone and rebuild all 2929 targets. libv8_monolith.a and the
+    # generated headers under out.gn/*/gen stay — those are what doctrenderer
+    # links and includes. Everything else in out.gn is intermediate.
+    v8out="$LIGHTOFFICE_PREBUILT_SRC/core/Common/3dParty/v8_89/v8/out.gn/linux_64"; \
+    if [ -f "$v8out/obj/libv8_monolith.a" ]; then \
+      before=$(du -sm "$v8out" | cut -f1); \
+      find "$v8out/obj" -name '*.o' -delete; \
+      find "$v8out" -maxdepth 1 -name '.ninja_deps' -o -maxdepth 1 -name '.ninja_log' | xargs -r rm -f; \
+      after=$(du -sm "$v8out" | cut -f1); \
+      echo "v8 out.gn pruned: ${before} MiB -> ${after} MiB"; \
+    else \
+      echo "v8 out.gn NOT pruned: libv8_monolith.a absent"; \
+    fi
 
 # Record what got baked, so an image in a registry can be identified without
 # running it: docker run --rm IMAGE cat /etc/lightoffice-build-image

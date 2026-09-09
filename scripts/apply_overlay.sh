@@ -25,6 +25,32 @@ drift() { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; DRIFTED=$((DRIFTED + 1));
 skip() { printf '  \033[33m·\033[0m %s (already applied)\n' "$*"; }
 die()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; exit 1; }
 
+# Copy SRC to DST only when the content differs.
+#
+# `install` always rewrites, which always bumps the mtime. On a prebuilt tree
+# that is expensive out of all proportion: grunt and make key off mtimes, so
+# re-installing a byte-identical logo invalidates the whole web-apps/sdkjs JS
+# build the image already did, and a release run pays ~25 minutes to redo work
+# whose inputs never changed.
+#
+# cmp is content-exact, so this is not a heuristic: identical bytes are skipped,
+# anything else is written. Destinations are reported as (unchanged) so a run
+# still shows what the overlay covers rather than going silent.
+UNCHANGED=0
+install_if_changed() {
+  local mode="$1" src="$2" dst="$3"
+  # A destination ending in / (or an existing directory) means "into that dir".
+  case "$dst" in
+    */) dst="$dst$(basename "$src")" ;;
+    *)  [ -d "$dst" ] && dst="$dst/$(basename "$src")" ;;
+  esac
+  if [ -f "$dst" ] && cmp -s "$src" "$dst"; then
+    UNCHANGED=$((UNCHANGED + 1))
+    return 0
+  fi
+  install -m "$mode" "$src" "$dst"
+}
+
 [ -d "$SRC/web-apps" ] && [ -d "$SRC/desktop-apps" ] \
   || die "not an ONLYOFFICE checkout: $SRC (expected web-apps/ and desktop-apps/)"
 
@@ -32,7 +58,7 @@ echo "Applying LightOffice overlay -> $SRC"
 
 # ---------------------------------------------------------------- 1. theme ---
 THEME_DIR="$SRC/web-apps/apps/common/main/resources/themes"
-install -m 0644 "$OVERLAY/web-apps/apps/common/main/resources/themes/theme_lightwps.json" "$THEME_DIR/"
+install_if_changed 0644 "$OVERLAY/web-apps/apps/common/main/resources/themes/theme_lightwps.json" "$THEME_DIR/"
 info "theme_lightwps.json installed"
 
 # Register the theme so the editors offer it in the appearance menu. themes.json
@@ -55,26 +81,28 @@ PY
 
 # ------------------------------------------------------------- 2. branding ---
 install -d "$SRC/desktop-apps/win-linux/res/lightoffice"
-install -m 0644 "$OVERLAY/branding/splash.png"      "$SRC/desktop-apps/win-linux/res/lightoffice/"
-install -m 0644 "$OVERLAY/branding/about_logo.png"  "$SRC/desktop-apps/win-linux/res/lightoffice/"
-install -m 0644 "$OVERLAY/branding/lightoffice.ico" "$SRC/desktop-apps/win-linux/res/icons/desktopeditors.ico"
+install_if_changed 0644 "$OVERLAY/branding/splash.png"      "$SRC/desktop-apps/win-linux/res/lightoffice/"
+install_if_changed 0644 "$OVERLAY/branding/about_logo.png"  "$SRC/desktop-apps/win-linux/res/lightoffice/"
+install_if_changed 0644 "$OVERLAY/branding/lightoffice.ico" "$SRC/desktop-apps/win-linux/res/icons/desktopeditors.ico"
 for png in "$OVERLAY"/branding/lightoffice_*.png; do
-  install -m 0644 "$png" "$SRC/desktop-apps/win-linux/res/lightoffice/"
+  install_if_changed 0644 "$png" "$SRC/desktop-apps/win-linux/res/lightoffice/"
 done
 info "splash / about logo / window icon installed"
 
 # version_p.h is upstream's own vendor hook (see the __NCT block it replaces),
 # so rebranding needs no edit to version.h itself.
-install -m 0644 "$OVERLAY/desktop-apps/win-linux/src/prop/version_p.h" \
+install_if_changed 0644 "$OVERLAY/desktop-apps/win-linux/src/prop/version_p.h" \
                 "$SRC/desktop-apps/win-linux/src/prop/version_p.h"
 info "binary branding strings overridden (version_p.h)"
 
 # ---------------------------------------------------------- 3. cloud config ---
 PROV="$SRC/desktop-apps/common/loginpage/providers/lightoffice"
 install -d "$PROV/assets"
-install -m 0644 "$OVERLAY/desktop-apps/common/loginpage/providers/lightoffice/config.json" "$PROV/"
-install -m 0644 "$OVERLAY"/desktop-apps/common/loginpage/providers/lightoffice/assets/*.svg "$PROV/assets/"
-install -m 0644 "$OVERLAY/desktop-apps/common/loginpage/src/lightoffice-cloud.js" \
+install_if_changed 0644 "$OVERLAY/desktop-apps/common/loginpage/providers/lightoffice/config.json" "$PROV/"
+for svg in "$OVERLAY"/desktop-apps/common/loginpage/providers/lightoffice/assets/*.svg; do
+  install_if_changed 0644 "$svg" "$PROV/assets/"
+done
+install_if_changed 0644 "$OVERLAY/desktop-apps/common/loginpage/src/lightoffice-cloud.js" \
                 "$SRC/desktop-apps/common/loginpage/src/"
 info "intranet cloud provider installed (10.0.7.10:8080)"
 
@@ -200,6 +228,10 @@ PY
 fi
 
 echo
+if [ "$UNCHANGED" -gt 0 ]; then
+  printf '  \033[33m·\033[0m %d file(s) already byte-identical — left untouched so the\n' "$UNCHANGED"
+  printf '    prebuilt JS and resource output stays valid\n'
+fi
 if [ "$DRIFTED" -ne 0 ]; then
   echo "OVERLAY INCOMPLETE: $DRIFTED patch anchor(s) no longer match upstream." >&2
   echo "Those customisations were NOT applied. Re-target them before shipping a" >&2
