@@ -1,0 +1,57 @@
+# Git and version control
+.git
+.gitignore
+.gitattributes
+
+# CI/CD and workflows (不需要copy进Docker)
+.github/
+
+# Build artifacts and caches (防止影响镜像layer缓存)
+artifacts/
+dist/
+build/
+*.o
+*.a
+*.so
+.ninja_log
+.ninja_deps
+*.pyc
+__pycache__/
+node_modules/
+.npm/
+
+# Local development and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Test and documentation (运行时不需要)
+tests/
+docs/
+*.md
+
+# Temporary files
+/tmp/
+*.log
+.cache/
+
+# Python virtual environments
+venv/
+env/
+.env
+
+# Node modules cache
+.npm-cache/
+
+# Docker and container files (递归不需要)
+docker/build-*.Dockerfile
+
+# Miscellaneous
+.baseline/
+baseline_metrics.json
+code_index.json
+package-lock.json
