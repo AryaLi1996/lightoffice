@@ -444,6 +444,60 @@ jobs:
 
       # Same as the Windows job above: a placeholder that reported success while
       # producing nothing. See that comment for why this now speaks up.
+      # STEP ONE OF THE macOS PORT: establish what only a real macOS runner can
+      # tell us. The rest was already settled by inspecting the upstream repos
+      # directly, and is recorded in scripts/package.sh:
+      #
+      #   - build_tools/tools/mac holds only 7za and toolchain.prf, so macOS
+      #     needs none of the python3/Qt/sysroot staging tools/linux does.
+      #   - the macOS build is NOT the qmake pipeline. It is
+      #     desktop-apps/macos/ONLYOFFICE.xcodeproj driven by fastlane, lanes
+      #     release_arm / release_x86_64 / release_v8.
+      #   - the existing lane signs with a Developer ID and notarizes, which is
+      #     exactly what fleet-only distribution does not need.
+      #   - desktop-apps/macos/package_mac.py, which scripts/package.sh used to
+      #     invoke, does not exist.
+      #
+      # What remains unknown is the runner itself: which Xcode, whether fastlane
+      # and its Ruby deps are present, and whether Qt is available at all. Those
+      # decide whether the lane can run here or needs its toolchain installed.
+      - name: Discover what a macOS build needs
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          {
+            echo "### macOS build: runner capabilities"
+            echo
+            echo '```'
+            echo "macOS       : $(sw_vers -productVersion 2>/dev/null) ($(uname -m))"
+            echo "Xcode       : $(xcodebuild -version 2>/dev/null | tr '\n' ' ')"
+            echo "SDK         : $(xcrun --sdk macosx --show-sdk-version 2>/dev/null)"
+            echo "clang       : $(clang --version 2>/dev/null | head -1)"
+            echo "codesign    : $(command -v codesign || echo MISSING)"
+            echo "hdiutil     : $(command -v hdiutil || echo MISSING)"
+            echo "fastlane    : $(fastlane --version 2>/dev/null | tail -1 || echo 'not installed')"
+            echo "ruby        : $(ruby --version 2>/dev/null || echo 'not installed')"
+            echo "node/npx    : $(node --version 2>/dev/null) / $(command -v npx >/dev/null && echo yes || echo no)"
+            echo "qmake       : $(command -v qmake6 qmake 2>/dev/null | head -1 || echo 'not installed')"
+            echo "brew qt     : $(brew list --versions qt 2>/dev/null || echo 'not installed')"
+            echo '```'
+            echo
+            echo "Ad-hoc signing is the target (fleet-only distribution, no Apple"
+            echo "Developer account). Confirming codesign accepts the ad-hoc identity"
+            echo "on this runner, which is the mechanism the whole plan rests on:"
+            echo '```'
+            printf 'int main(void){return 0;}\n' > /tmp/adhoc.c
+            if clang -o /tmp/adhoc /tmp/adhoc.c 2>/dev/null; then
+              codesign -s - --force /tmp/adhoc 2>&1 && echo "codesign -s - : OK"
+              codesign -dv /tmp/adhoc 2>&1 | sed -n '1,6p'
+            else
+              echo "could not compile a test binary"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Report that no macOS installer is produced yet
         shell: bash
         run: |
