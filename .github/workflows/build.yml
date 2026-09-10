@@ -288,6 +288,11 @@ jobs:
       # but it is a repair: something in the upstream link pulls libstdc++'s
       # ios_init.o out of a static archive while leaving ios.o behind. This
       # reports which archive that is, so the root fix can replace the repair.
+      # Run #14 proved the shim works and, in doing so, showed the problem is a
+      # CLASS of symbols rather than one: the loader moved past both symbols the
+      # shim supplies and stopped at std::locale::_S_classic. Locally the class
+      # is 11 symbols, four of them functions — so it cannot be shimmed, and the
+      # root cause has to be found instead. This step exists to find it.
       - name: Trace the dangling libstdc++ statics
         continue-on-error: true
         shell: bash
@@ -295,53 +300,62 @@ jobs:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
         run: |
           set +e
-          re='_ZNSt8ios_base4Init(11_S_refcountE|20_S_synced_with_stdioE)'
+          dir="$LIGHTOFFICE_SRC/build_tools/out/linux_64/onlyoffice/desktopeditors"
+          host=/usr/lib/x86_64-linux-gnu/libstdc++.so.6
+          arch=$(gcc -print-file-name=libstdc++.a)
+          # nm -D prints "symbol@@GLIBCXX_3.4"; comparing those raw against the
+          # archive's unversioned names reports ~10x more missing symbols than
+          # actually are. Strip the version before every comparison here.
+          nm -D --defined-only "$host" 2>/dev/null | awk '{print $3}' | sed 's/@.*//' \
+            | sort -u > /tmp/so-exports.txt
           {
             echo "### Dangling libstdc++ statics"
             echo
-            echo "Host libstdc++ exports (0 means unexported, which is the bug):"
-            echo '```'
-            for s in _S_refcount _S_synced_with_stdio; do
-              printf '%-24s %s\n' "$s" \
-                "$(nm -D --defined-only /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
-                   2>/dev/null | grep -c "$s")"
-            done
-            echo '```'
+            echo "host libstdc++: $(readlink -f "$host")"
+            echo "static archive: $arch"
             echo
-            echo "#### Static archives carrying libstdc++'s ios_init.o"
+            echo '#### Ground truth: symbols the deployed tree needs and no library provides'
             echo '```'
-            find "$LIGHTOFFICE_SRC" -name '*.a' -size +1k 2>/dev/null \
-              | while read -r a; do
-                  if ar t "$a" 2>/dev/null | grep -qx 'ios_init.o'; then
-                    printf '%s  (ios.o present: %s)\n' "${a#"$LIGHTOFFICE_SRC"/}" \
-                      "$(ar t "$a" 2>/dev/null | grep -cx 'ios.o')"
-                  fi
-                done | head -40
-            echo '(end)'
-            echo '```'
-            echo
-            echo '#### Objects in the build tree that reference them'
-            echo '```'
-            find "$LIGHTOFFICE_SRC" \( -name '*.a' -o -name '*.o' \) -size +1k 2>/dev/null \
-              | xargs -r -n 40 nm -A --undefined-only 2>/dev/null \
-              | grep -E "$re" | sed "s#$LIGHTOFFICE_SRC/##" | head -40
-            echo '(end)'
-            echo '```'
-            echo
-            echo '#### Deployed objects still unresolved after the repair'
-            echo '```'
-            dir="$LIGHTOFFICE_SRC/build_tools/out/linux_64/onlyoffice/desktopeditors"
             find "$dir" -type f 2>/dev/null | while read -r f; do
               head -c 4 "$f" 2>/dev/null | grep -q ELF || continue
-              nm -D --undefined-only "$f" 2>/dev/null | grep -qE "$re" || continue
-              (cd "$(dirname "$f")" && ldd "$(basename "$f")" 2>/dev/null \
-                 | grep -q 'libwpslite-stdcxx-compat.so.1 => /') \
-                && continue
-              echo "UNRESOLVED: ${f#"$dir"/}"
-            done | head -20
+              nm -D --undefined-only "$f" 2>/dev/null | awk '{print $2}' | sed 's/@.*//'
+            done | sort -u | grep -E '^_ZNS' > /tmp/tree-undef.txt
+            comm -23 /tmp/tree-undef.txt /tmp/so-exports.txt > /tmp/tree-missing.txt
+            # A symbol missing from libstdc++.so but present in libstdc++.a is
+            # the signature of this bug: a static-archive object was linked in
+            # without the object holding its definitions.
+            nm -A --defined-only "$arch" 2>/dev/null | awk '{print $3}' | sort -u \
+              > /tmp/a-defines.txt
+            comm -12 /tmp/tree-missing.txt /tmp/a-defines.txt | tee /tmp/trap.txt | c++filt
+            echo
+            echo "trap symbols: $(wc -l < /tmp/trap.txt)"
+            echo "other unresolved (not from libstdc++): $(comm -23 /tmp/tree-missing.txt /tmp/a-defines.txt | wc -l)"
+            echo '```'
+            echo
+            echo '#### Which archive object each one lives in'
+            echo '```'
+            while read -r sym; do
+              printf '%-56s defined in: %s\n' "$(echo "$sym" | cut -c1-56)" \
+                "$(nm -A --defined-only "$arch" 2>/dev/null | grep -w "$sym" \
+                   | head -1 | sed 's/.*\.a://; s/:.*//')"
+            done < /tmp/trap.txt
+            echo '```'
+            echo
+            echo '#### THE ROOT CAUSE: who pulls those objects in'
+            echo '```'
+            # If a static libstdc++ object is inside one of the build tree'"'"'s own
+            # archives, that archive is the culprit and naming it is the fix.
+            find "$LIGHTOFFICE_SRC" -name '*.a' -size +1k 2>/dev/null | while read -r a; do
+              m=$(ar t "$a" 2>/dev/null | grep -xE 'ios_init\.o|locale_init\.o|localename\.o|globals_io\.o|locale\.o|ios\.o' | tr '\n' ' ')
+              [ -n "$m" ] && printf '%s\n    contains: %s\n' "${a#"$LIGHTOFFICE_SRC"/}" "$m"
+            done | head -40
+            echo "--- link flags that would cause this ---"
+            grep -rl -- '-static-libstdc++' "$LIGHTOFFICE_SRC" \
+              --include='*.pro' --include='*.pri' --include='*.gn' --include='*.gni' \
+              --include='Makefile' --include='*.conf' 2>/dev/null | head -20
             echo '(end)'
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Verify the build produced an installer
