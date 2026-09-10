@@ -288,12 +288,41 @@ jobs:
           restore-keys: |
             vcpkg-${{ runner.os }}-
 
-      - name: Build Windows
+      # This job produces no installer yet, and until 2026-09-10 it said so
+      # only by echoing a placeholder line — then ran upload-artifact against an
+      # artifacts/ directory that was never created:
+      #
+      #   ##[warning]No files were found with the provided path: artifacts/.
+      #   No artifacts will be uploaded.
+      #
+      # and still reported SUCCESS. A green Windows job was indistinguishable
+      # from a Windows build that worked, which is worse than an obviously
+      # missing one. It stays green (an unimplemented port is not a failure)
+      # but now states the gap where a reader will actually see it.
+      - name: Report that no Windows installer is produced yet
         shell: bash
         run: |
-          echo "Windows build step placeholder — add your native build command here"
+          echo "::notice::windows: no installer produced — the native build is not implemented yet"
+          {
+            echo "### Windows: no installer produced"
+            echo
+            echo "This job is a placeholder. It does **not** build anything."
+            echo
+            echo "\`scripts/package.sh\` already knows how to package on Windows —"
+            echo "it invokes upstream's \`make_installer.bat\` from"
+            echo "\`desktop-apps/win-linux/package/windows\`. What is missing is the"
+            echo "*build* that must run before it: \`scripts/build_desktop.sh\` drives"
+            echo "\`build_tools/tools/linux\` only and exits 2 on any other host."
+            echo
+            echo "Needs: a Windows host with the MSVC toolchain and Inno Setup."
+          } >> "$GITHUB_STEP_SUMMARY"
 
+      # Guarded rather than deleted: when the native build above starts
+      # producing artifacts/, this uploads them with no further change. Without
+      # the guard it runs on an empty directory and warns on every single run,
+      # which is exactly the noise that made the gap easy to miss.
       - name: Upload Windows artifacts
+        if: hashFiles('artifacts/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
@@ -335,12 +364,29 @@ jobs:
           restore-keys: |
             xcode-deriveddata-${{ runner.os }}-
 
-      - name: Build macOS
+      # Same as the Windows job above: a placeholder that reported success while
+      # producing nothing. See that comment for why this now speaks up.
+      - name: Report that no macOS installer is produced yet
         shell: bash
         run: |
-          echo "macOS build step placeholder — add your native build command here"
+          echo "::notice::macos: no installer produced — the native build is not implemented yet"
+          {
+            echo "### macOS: no installer produced"
+            echo
+            echo "This job is a placeholder. It does **not** build anything."
+            echo
+            echo "\`scripts/package.sh\` already knows how to package on macOS —"
+            echo "it invokes upstream's \`desktop-apps/macos/package_mac.py\`. What is"
+            echo "missing is the *build* that must run before it:"
+            echo "\`scripts/build_desktop.sh\` drives \`build_tools/tools/linux\` only and"
+            echo "exits 2 on any other host."
+            echo
+            echo "Needs: a macOS host with Xcode and codesign (and notarization for"
+            echo "anything meant to be distributed)."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload macOS artifacts
+        if: hashFiles('artifacts/**') != ''
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
