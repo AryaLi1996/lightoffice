@@ -443,6 +443,13 @@ echo "build exit code: $rc"
 if [ -n "$BIN" ] && [ -x "$BIN" ]; then
   ok "binary: $BIN"
   file "$BIN"
+  # The tree links and installs but will not load on a GCC 13 host until the
+  # orphaned std::ios_base::Init statics are supplied. Do it here, on the deploy
+  # tree, so packaging and the acceptance run both see a launchable build.
+  phase_begin "repair libstdc++ statics"
+  "$ROOT/scripts/fix_stdcxx_statics.sh" "$(dirname "$BIN")" || \
+    bad "libstdc++ static repair failed — the app will not launch"
+  phase_end
 else
   bad "no DesktopEditors binary produced"
 fi

@@ -105,13 +105,20 @@ if ! xdotool getdisplaygeometry >/dev/null 2>&1; then
 fi
 
 if [ -z "$BIN" ]; then
-  for c in "$(dirname "$ROOT")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
-           "${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}/desktop-apps/win-linux/build/linux_64/DesktopEditors"; do
+  # build_tools/out is where upstream actually deploys — build_tools/scripts
+  # resolves its output as scripts/../out. The two paths tried before this one
+  # have never existed, which is why V.5 has never had a binary to run: the same
+  # mistake 57b3204 corrected in package.sh and verify_ac.sh, and the one
+  # scripts/build_desktop.sh carried until it was fixed there too.
+  _src="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
+  for c in "$_src/build_tools/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+           "$(dirname "$ROOT")/out/linux_64/onlyoffice/desktopeditors/DesktopEditors" \
+           "$_src/desktop-apps/win-linux/build/linux_64/DesktopEditors"; do
     [ -x "$c" ] && { BIN="$c"; break; }
   done
 fi
 if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
-  direct_note="no built application; scripts/build_desktop.sh is blocked here (v8 sources unreachable — see scripts/build_desktop.sh --check-only)"
+  direct_note="no built application to test against (searched build_tools/out); run scripts/build_desktop.sh first"
   ime_note="$direct_note"
   finish
 fi

@@ -123,15 +123,27 @@ fi
 
 if [ -x "$OUTBIN" ] && file "$OUTBIN" 2>/dev/null | grep -q ELF; then
   record 1.3 PASS "构建产物存在且为 ELF 可执行文件" "$OUTBIN"
+elif [ ! -d "$SRC" ]; then
+  # No upstream checkout means no build was attempted in this lane — the
+  # repo-only acceptance run. That is not a failure of the build.
+  record 1.3 SKIPPED "构建产物校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
 else
-  record 1.3 BLOCKED "无法构建：v8 的来源主机被出网策略拒绝" \
-    "构建在 v8 依赖处受阻：core/DesktopEditor/doctrenderer 需要 JS 引擎，Linux 下唯一替代 (use_javascript_core) 只链接 Apple 框架与 Objective-C 源码，仅限 macOS/iOS。v8 需 depot_tools + gclient，来源 chromium.googlesource.com 与 CIPD 均被出网策略拒绝 (HTTP 000/403)。其余依赖已全部解决：boost / CEF / ICU / OpenSSL 均已成功构建，python3 与 CEF 经 git 通道取得 (scripts/fetch_prebuilts.sh)，Qt 用系统 5.15.13。诊断：scripts/build_desktop.sh --check-only"
+  # A checkout exists, so a build was attempted here and produced nothing.
+  # This used to report the v8 egress block, which no longer applies:
+  # depot_tools is pinned into the image by docker/build-linux.Dockerfile and
+  # the pipeline has produced a .deb since. So this is a real build failure.
+  record 1.3 FAIL "本次构建未产出可执行文件" \
+    "上游检出存在但 $OUTBIN 不是 ELF 可执行文件。诊断：Build desktop editors 步骤的 phase 标记与 make.py 退出码。"
 fi
 
 if [ -x "$OUTBIN" ]; then
   ver="$(cd "$(dirname "$OUTBIN")" && LD_LIBRARY_PATH=.:"$(dirname "$OUTBIN")" timeout 60 ./DesktopEditors --version 2>&1 | head -1)"
   if grep -qE '[0-9]+\.[0-9]+\.[0-9]+' <<<"$ver"; then
     record 1.4 PASS "--version 输出版本号且未段错误" "$ver"
+  elif grep -q "symbol lookup error\|undefined symbol\|error while loading shared libraries" <<<"$ver"; then
+    # The one failure this ever produced: the tree linked but would not load.
+    # Naming it here beats "输出不含版本号", which says nothing about the cause.
+    record 1.4 FAIL "动态链接失败，进程在 main() 之前退出" "$ver"
   else
     record 1.4 FAIL "--version 输出不含版本号" "$ver"
   fi

@@ -69,7 +69,7 @@ jobs:
             libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
             libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
-            libasound2-dev libatspi2.0-dev dpkg-dev
+            libasound2-dev libatspi2.0-dev dpkg-dev patchelf binutils
 
       - name: Free disk space
         run: |
@@ -243,7 +243,7 @@ jobs:
             echo "Uncompressed deploy tree: **$(du -sh "$dir" | cut -f1)**"
             deb=$(find artifacts -maxdepth 1 -name 'WPS-Lite-*.deb' | head -1)
             if [ -n "$deb" ]; then
-              echo "Packaged .deb: **$(du -h "$deb" | cut -f1)** (AC V.3 limit: 120MB)"
+              echo "Packaged .deb: **$(du -h "$deb" | cut -f1)** (AC V.3 limit: ${LIGHTOFFICE_MAX_INSTALLER_MB:-500}MB)"
             fi
             echo
             echo '#### Top 25 directories'
@@ -265,6 +265,66 @@ jobs:
                                sz[ext]+=$1; cnt[ext]++ }
                              END { for (e in sz) printf "%10.1f MiB  %6d  %s\n", sz[e]/1048576, cnt[e], e }' \
               | sort -rn | head -20
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # The repair in scripts/fix_stdcxx_statics.sh makes the tree launchable,
+      # but it is a repair: something in the upstream link pulls libstdc++'s
+      # ios_init.o out of a static archive while leaving ios.o behind. This
+      # reports which archive that is, so the root fix can replace the repair.
+      - name: Trace the dangling libstdc++ statics
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          set +e
+          re='_ZNSt8ios_base4Init(11_S_refcountE|20_S_synced_with_stdioE)'
+          {
+            echo "### Dangling libstdc++ statics"
+            echo
+            echo "Host libstdc++ exports (0 means unexported, which is the bug):"
+            echo '```'
+            for s in _S_refcount _S_synced_with_stdio; do
+              printf '%-24s %s\n' "$s" \
+                "$(nm -D --defined-only /usr/lib/x86_64-linux-gnu/libstdc++.so.6 \
+                   2>/dev/null | grep -c "$s")"
+            done
+            echo '```'
+            echo
+            echo "#### Static archives carrying libstdc++'s ios_init.o"
+            echo '```'
+            find "$LIGHTOFFICE_SRC" -name '*.a' -size +1k 2>/dev/null \
+              | while read -r a; do
+                  if ar t "$a" 2>/dev/null | grep -qx 'ios_init.o'; then
+                    printf '%s  (ios.o present: %s)\n' "${a#"$LIGHTOFFICE_SRC"/}" \
+                      "$(ar t "$a" 2>/dev/null | grep -cx 'ios.o')"
+                  fi
+                done | head -40
+            echo '(end)'
+            echo '```'
+            echo
+            echo '#### Objects in the build tree that reference them'
+            echo '```'
+            find "$LIGHTOFFICE_SRC" \( -name '*.a' -o -name '*.o' \) -size +1k 2>/dev/null \
+              | xargs -r -n 40 nm -A --undefined-only 2>/dev/null \
+              | grep -E "$re" | sed "s#$LIGHTOFFICE_SRC/##" | head -40
+            echo '(end)'
+            echo '```'
+            echo
+            echo '#### Deployed objects still unresolved after the repair'
+            echo '```'
+            dir="$LIGHTOFFICE_SRC/build_tools/out/linux_64/onlyoffice/desktopeditors"
+            find "$dir" -type f 2>/dev/null | while read -r f; do
+              head -c 4 "$f" 2>/dev/null | grep -q ELF || continue
+              nm -D --undefined-only "$f" 2>/dev/null | grep -qE "$re" || continue
+              (cd "$(dirname "$f")" && ldd "$(basename "$f")" 2>/dev/null \
+                 | grep -q 'libwpslite-stdcxx-compat.so.1 => /') \
+                && continue
+              echo "UNRESOLVED: ${f#"$dir"/}"
+            done | head -20
+            echo '(end)'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
