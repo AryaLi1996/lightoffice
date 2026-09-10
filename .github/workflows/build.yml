@@ -250,7 +250,17 @@ jobs:
 
   build-macos:
     name: Build macOS
-    runs-on: macos-13
+    # macos-13 is being retired and nothing is assigned to it any more. In run
+    # 34380149207 this job sat QUEUED for over seven hours while the other two
+    # finished -- worse than a failure, because the RUN never reaches a
+    # conclusion, so release.yml's `gh run list --workflow build.yml --status
+    # success` can never find a run to publish from, and a queue slot is held
+    # the whole time.
+    #
+    # Still a placeholder that only echoes, so it needs no pinned image.
+    # macos-latest is whatever GitHub currently provides; pin it again when a
+    # real Xcode build lands here and cares which SDK it gets.
+    runs-on: macos-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
