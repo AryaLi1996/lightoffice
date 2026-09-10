@@ -5,7 +5,8 @@
 # Cross-platform packaging is host-bound and there is no way around it:
 #   .deb  needs Linux + dpkg-deb
 #   .exe  needs Windows + the Inno Setup / MSVC toolchain (make_installer.bat)
-#   .dmg  needs macOS + Xcode and codesign (package_mac.py)
+#   .dmg  needs macOS + Xcode (desktop-apps/macos, an Xcode project driven
+#         by fastlane — NOT a package_mac.py; no such file exists)
 # Running this on Linux therefore produces the .deb and reports the other two as
 # not-buildable-here rather than emitting a stub that would fail AC 5.1's size
 # check anyway. Drive the three from a CI matrix, one runner per OS, and collect
@@ -150,11 +151,40 @@ case "$OS" in
 esac
 
 # ------------------------------------------------------------------ macos ---
+# This used to call `python3 "$SRC/desktop-apps/macos/package_mac.py"`. That
+# file does not exist — not at the pinned desktop-apps commit, not anywhere in
+# the repository. Checked by sparse-checking out desktop-apps/macos at
+# bc46371: `find . -name package_mac.py` returns nothing. It is the same class
+# of bug as the "$SRC/../out" binary path — a plausible-looking path that was
+# never real, invisible because no macOS build has ever reached packaging.
+#
+# What is actually there is a different build system from Linux's entirely:
+#
+#   desktop-apps/macos/ONLYOFFICE.xcodeproj   an Xcode project
+#   desktop-apps/macos/fastlane/Fastfile      lanes release_arm,
+#                                             release_x86_64, release_v8
+#
+# The existing lane builds for Developer ID and notarizes:
+#
+#     gym(codesigning_identity: ENV["CODESIGNING_IDENTITY"],
+#         export_method: 'developer-id', ...)
+#     notarize(package: app, print_log: true)
+#
+# which needs an Apple Developer account. For fleet-only distribution that is
+# not wanted: ad-hoc signing (codesign -s -) plus a distribution channel that
+# does not set com.apple.quarantine is enough, and costs nothing. The .dmg step
+# in that lane (`npx appdmg resources/appdmg.json`) needs no account at all and
+# is reusable as-is.
+#
+# Until that lane exists, say so rather than invoking a file that is not there.
 if [ "$OS" = "Darwin" ]; then
-  python3 "$SRC/desktop-apps/macos/package_mac.py" --version "$VERSION"
-  built=$((built + 1))
+  echo "  skip .dmg — the macOS lane is not implemented yet"
+  echo "    upstream builds macOS from desktop-apps/macos/ONLYOFFICE.xcodeproj"
+  echo "    via fastlane, not from the qmake pipeline this script drives."
+  echo "    Its release lanes sign with a Developer ID and notarize; the"
+  echo "    fleet-only route needs an ad-hoc-signed variant instead."
 else
-  echo "  skip .dmg — needs a macOS host (package_mac.py, Xcode + codesign)"
+  echo "  skip .dmg — needs a macOS host (Xcode; desktop-apps/macos)"
 fi
 
 # -------------------------------------------------------------- checksums ---
