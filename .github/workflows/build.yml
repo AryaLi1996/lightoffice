@@ -219,6 +219,58 @@ jobs:
           path: artifacts/
           retention-days: 30
 
+      # scripts/verify_ac.sh has never once run against a real artifact. Eleven
+      # of its criteria have only ever reported BLOCKED, not because they fail
+      # but because there was nothing to measure -- no binary, no installer.
+      # Run 34421271035 produced both, so they can finally be evaluated.
+      #
+      # It runs HERE and not anywhere else because this is the only place all
+      # three inputs coexist: the packaged .deb in artifacts/, the built tree at
+      # /opt/lightoffice/src that find_binary() searches, and an OS matching the
+      # one the binary was linked against. Pulling the artifact down to a dev
+      # container is not an option -- the egress policy denies the Actions
+      # artifact blob host (403 on CONNECT to *.blob.core.windows.net).
+      #
+      # After the upload, and continue-on-error, on purpose. The artifact is
+      # already safely stored by this point, and a genuine FAIL here is a
+      # finding to read rather than a reason to redden a build that produced a
+      # valid installer. Installer size is the likely one: the .deb is 1052 MiB
+      # against a criterion that expects far less.
+      - name: Acceptance criteria against the real artifact
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          set +e
+          # Bounded: several criteria probe the network (Nextcloud, Document
+          # Server) and others walk a 29 GB tree. Locally this took over two
+          # minutes; a pathological case must not sit on the job.
+          timeout 900 scripts/verify_ac.sh --json baseline/ac_report.json 2>&1 | tee /tmp/ac.log
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 124 ] && echo "::warning::verify_ac.sh hit the 900s timeout"
+          echo "verify_ac.sh exit: $rc"
+          {
+            echo "### Acceptance criteria (first run against a real artifact)"
+            echo
+            echo '```'
+            # The summary line plus every row that is not a plain PASS: those
+            # are the ones worth a human's attention.
+            grep -E 'FAIL|BLOCKED|ADJUSTED|SKIPPED|汇总' /tmp/ac.log || cat /tmp/ac.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Upload the acceptance-criteria report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ac-report
+          path: |
+            baseline/ac_report.json
+          retention-days: 30
+          if-no-files-found: warn
+
   build-windows:
     name: Build Windows
     runs-on: windows-2022

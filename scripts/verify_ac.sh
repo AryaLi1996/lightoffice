@@ -440,10 +440,10 @@ else
 fi
 
 record 4.4 BLOCKED "冷启动基准需要原版与优化版两个构建产物" \
-  "依赖 AC 1.3（v8 受阻）。基准脚本已就绪: tests/benchmark.js —— 注意该判据需要两次构建（未优化基线 + 优化版）才能比较。"
+  "真正的阻塞点不是 v8（现已构建成功、二进制与 .deb 均已产出），而是该判据本身需要两次构建：未优化基线 + 优化版，缺一不可比较。基准脚本已就绪: tests/benchmark.js"
 
 record 4.5 BLOCKED "峰值内存 (Max RSS) 基准需要可运行的构建产物" \
-  "依赖 AC 1.3（v8 受阻）。tests/benchmark.js 使用 /usr/bin/time -v 采集 Max RSS。"
+  "真正的阻塞点不是 v8（现已构建成功），而是采集 Max RSS 需要真正把应用跑起来，即需要 X 显示。tests/benchmark.js 使用 /usr/bin/time -v 采集。"
 
 # ============================================================== Ticket 5 =====
 section "Ticket 5 — 打包、系统测试与文档交付"
@@ -465,10 +465,38 @@ else
     ".exe 需 Windows + MSVC/Inno Setup；.dmg 需 macOS + Xcode/codesign——在 Linux 容器中无法产出。scripts/package.sh 会在对应宿主上产出并生成 checksums.txt"
 fi
 
-record 5.2 BLOCKED "deb 安装冒烟测试需要先产出 .deb" "依赖 AC 5.1"
+# 5.2 曾是无条件 BLOCKED，理由是"依赖 AC 5.1"。AC 5.1 需要三平台安装包齐备，
+# 但 deb 冒烟测试只需要 .deb 本身——把它挂在 5.1 上，等于让一个可测的判据永远
+# 不被测。现在 Linux 构建已产出 .deb，这里改为真正解包校验。
+# 用 dpkg-deb -x 而不是 dpkg -i：解包不需要 root、不触碰宿主系统、也不会因为
+# 运行环境缺少依赖而失败，但足以证明包结构完整且应用二进制确实在里面。
+deb_pkg=$(find "$ROOT/artifacts" -maxdepth 1 -name '*.deb' 2>/dev/null | head -1)
+if [ -z "$deb_pkg" ]; then
+  record 5.2 BLOCKED "deb 安装冒烟测试需要先产出 .deb" \
+    "artifacts/ 中没有 .deb——先在 Linux 宿主运行 scripts/package.sh"
+elif ! command -v dpkg-deb >/dev/null 2>&1; then
+  record 5.2 SKIPPED "本机没有 dpkg-deb，无法解包校验" "在 Debian/Ubuntu 宿主上运行"
+else
+  deb_tmp=$(mktemp -d)
+  if ! dpkg-deb --info "$deb_pkg" >/dev/null 2>&1; then
+    record 5.2 FAIL "dpkg-deb 无法解析该 .deb 的控制信息" "$(basename "$deb_pkg")"
+  elif ! dpkg-deb -x "$deb_pkg" "$deb_tmp" >/dev/null 2>&1; then
+    record 5.2 FAIL "dpkg-deb 无法解包该 .deb" "$(basename "$deb_pkg")"
+  else
+    inst_bin=$(find "$deb_tmp" -type f -name DesktopEditors -perm -u+x 2>/dev/null | head -1)
+    if [ -n "$inst_bin" ]; then
+      record 5.2 PASS "deb 可解析且可解包，应用二进制在包内且可执行" \
+        "$(basename "$deb_pkg") -> ${inst_bin#"$deb_tmp"}"
+    else
+      record 5.2 FAIL "deb 可解包，但包内没有可执行的 DesktopEditors" \
+        "$(basename "$deb_pkg")"
+    fi
+  fi
+  rm -rf "$deb_tmp"
+fi
 
 record 5.3 BLOCKED "Playwright CDP 冒烟测试需要可运行的应用" \
-  "依赖 AC 1.3。测试脚本已就绪: tests/smoke_cdp.js（断言 #id_main_editor 存在并校验保存后生成 .docx）"
+  "真正的阻塞点不是 v8（现已构建成功），而是 CDP 冒烟测试需要把应用跑起来，即需要 X 显示。测试脚本已就绪: tests/smoke_cdp.js（断言 #id_main_editor 存在并校验保存后生成 .docx）"
 
 DG="$ROOT/docs/DEPLOYMENT_GUIDE.md"
 if [ -f "$DG" ]; then
