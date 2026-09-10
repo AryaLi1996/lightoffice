@@ -8,6 +8,20 @@ on:
 permissions:
   contents: read
 
+# The Linux job takes about 50 minutes. Merging three PRs in quick succession
+# starts three of them, all building the same tree, and only the newest commit
+# is the one anyone wants built — the rest burn a runner for an answer that is
+# already stale before it arrives. On the night of 2026-09-10 four superseded
+# runs had to be cancelled by hand (34380149207, 34420970170, 34421078528,
+# 34432524996, 34434158377); doing that reliably depends on someone watching.
+#
+# cancel-in-progress rather than queueing: a queued duplicate still costs the
+# full 50 minutes, it just costs them later, and it delays the run that matters
+# behind one whose result is already superseded.
+concurrency:
+  group: build-artifacts-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-linux:
     name: Build Linux
