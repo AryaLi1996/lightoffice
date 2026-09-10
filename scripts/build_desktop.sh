@@ -457,6 +457,14 @@ if [ -n "$BIN" ] && [ -x "$BIN" ]; then
   "$ROOT/scripts/fix_stdcxx_statics.sh" "$(dirname "$BIN")" || \
     bad "libstdc++ static repair failed — the app will not launch"
   phase_end
+  # Before dedupe: this rewrites files, and after deduplication identical files
+  # share an inode, so writing one would write through every link at once.
+  # Running first also keeps identical GIFs identical, so dedupe still collapses
+  # them afterwards.
+  phase_begin "optimise GIFs losslessly"
+  "$ROOT/scripts/optimize_gifs.sh" "$(dirname "$BIN")" || \
+    bad "GIF optimisation failed — the installer will be larger than it needs to be"
+  phase_end
   # LAST, and it must stay last. Deduplication makes identical files share one
   # inode, so any later tool that writes in place would write through every
   # link at once. strip and patchelf both run above for exactly that reason.
