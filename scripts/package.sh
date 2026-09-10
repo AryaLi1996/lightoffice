@@ -24,8 +24,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 ART="$ROOT/artifacts"
 VERSION="1.0.0"
-COMPRESS_TYPE="${LIGHTOFFICE_DEB_COMPRESS_TYPE:-gzip}"
-COMPRESS_LEVEL="${LIGHTOFFICE_DEB_COMPRESS_LEVEL:-1}"
+# xz by default, not gzip -1. The earlier default traded size for packaging
+# speed, which is backwards once AC V.3 caps the installer at 120MB — the first
+# .deb built with gzip -1 was 1052 MiB. Callers that genuinely want speed over
+# size can still pass --compress-type gzip --compress-level 1, or set the
+# environment variables.
+COMPRESS_TYPE="${LIGHTOFFICE_DEB_COMPRESS_TYPE:-xz}"
+COMPRESS_LEVEL="${LIGHTOFFICE_DEB_COMPRESS_LEVEL:-6}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
