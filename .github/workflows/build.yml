@@ -266,7 +266,22 @@ jobs:
                              END { for (e in sz) printf "%10.1f MiB  %6d  %s\n", sz[e]/1048576, cnt[e], e }' \
               | sort -rn | head -20
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo
+            echo '#### Debug info still in the payload'
+            echo '```'
+            find "$dir" -type f \( -name '*.so' -o -name '*.so.*' -o -perm -u+x \) \
+              -printf '%s\t%p\n' 2>/dev/null \
+              | while IFS=$'\t' read -r sz f; do
+                  head -c 4 "$f" 2>/dev/null | grep -q ELF || continue
+                  file "$f" 2>/dev/null | grep -q 'not stripped' && echo "$sz	$f"
+                done \
+              | sort -rn \
+              | awk -v d="$dir" '{ t+=$1; n++; if (n<=10) { p=$2; sub(d,".",p);
+                    printf "%8.1f MiB  %s\n", $1/1048576, p } }
+                  END { printf "\n%d unstripped file(s), %.1f MiB of debug info\n",
+                        n, t/1048576 }'
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
 
       # The repair in scripts/fix_stdcxx_statics.sh makes the tree launchable,

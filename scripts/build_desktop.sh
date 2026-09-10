@@ -446,6 +446,13 @@ if [ -n "$BIN" ] && [ -x "$BIN" ]; then
   # The tree links and installs but will not load on a GCC 13 host until the
   # orphaned std::ios_base::Init statics are supplied. Do it here, on the deploy
   # tree, so packaging and the acceptance run both see a launchable build.
+  # Strip BEFORE the repair: strip rewrites section headers and can corrupt a
+  # binary patchelf has already touched, so doing these in the other order
+  # would undo the launch fix in a way that only appears at runtime.
+  phase_begin "strip deploy tree"
+  "$ROOT/scripts/strip_deploy_tree.sh" "$(dirname "$BIN")" || \
+    bad "strip pass failed — the installer will be larger than it needs to be"
+  phase_end
   phase_begin "repair libstdc++ statics"
   "$ROOT/scripts/fix_stdcxx_statics.sh" "$(dirname "$BIN")" || \
     bad "libstdc++ static repair failed — the app will not launch"
