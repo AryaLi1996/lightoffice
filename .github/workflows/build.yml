@@ -161,6 +161,9 @@ jobs:
           scripts/fetch_prebuilts.sh || echo "::warning::prebuilt fetch incomplete; the build may not start"
           scripts/apply_overlay.sh "$LIGHTOFFICE_SRC"
           scripts/apply_build_flags.sh "$LIGHTOFFICE_SRC"
+          # Must run after apply_build_flags.sh, which appends to the same
+          # defaults.pri, and before any link.
+          scripts/patch_static_libstdcxx.sh "$LIGHTOFFICE_SRC"
           scripts/patch_qt_compat.sh "$LIGHTOFFICE_SRC"
           scripts/patch_v8_incremental.sh "$LIGHTOFFICE_SRC"
           scripts/trim_dictionaries.sh "$LIGHTOFFICE_SRC"
@@ -421,9 +424,12 @@ jobs:
               [ -n "$m" ] && printf '%s\n    contains: %s\n' "${a#"$LIGHTOFFICE_SRC"/}" "$m"
             done | head -40
             echo "--- link flags that would cause this ---"
-            grep -rl -- '-static-libstdc++' "$LIGHTOFFICE_SRC" \
-              --include='*.pro' --include='*.pri' --include='*.gn' --include='*.gni' \
-              --include='Makefile' --include='*.conf' 2>/dev/null | head -20
+            # --include must precede `--`: after `--`, grep treats each one as a
+            # FILE operand and searches everything. Run 34449852586 reported
+            # clang++ and libclang.so here for exactly that reason.
+            grep -rln --include='*.pro' --include='*.pri' --include='*.gn' \
+              --include='*.gni' --include='Makefile' --include='*.conf' \
+              -- '-static-libstdc++' "$LIGHTOFFICE_SRC" 2>/dev/null | head -20
             echo '(end)'
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
