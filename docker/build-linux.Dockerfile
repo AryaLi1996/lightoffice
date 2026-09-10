@@ -54,7 +54,7 @@ RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends \
   libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
   libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
   libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
-  libasound2-dev libatspi2.0-dev dpkg-dev \
+  libasound2-dev libatspi2.0-dev dpkg-dev patchelf binutils \
   git curl ca-certificates python3 python3-venv rsync file \
   nodejs npm openjdk-11-jdk-headless mold \
   && npm install -g grunt-cli \
