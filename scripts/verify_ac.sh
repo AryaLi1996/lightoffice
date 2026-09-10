@@ -123,9 +123,17 @@ fi
 
 if [ -x "$OUTBIN" ] && file "$OUTBIN" 2>/dev/null | grep -q ELF; then
   record 1.3 PASS "构建产物存在且为 ELF 可执行文件" "$OUTBIN"
+elif [ ! -d "$SRC" ]; then
+  # No upstream checkout means no build was attempted in this lane — the
+  # repo-only acceptance run. That is not a failure of the build.
+  record 1.3 SKIPPED "构建产物校验需要上游检出" "未找到上游检出 ($SRC)——先运行 scripts/bootstrap.sh"
 else
-  record 1.3 FAIL "本次运行未产出可执行文件" \
-    "v8 的出网封锁已解除——depot_tools 由 docker/build-linux.Dockerfile 在镜像构建期固定拉取，构建流水线已多次完整跑通并产出 .deb。因此此处不再是环境阻塞，而是本次构建本身失败。诊断：查看 Build desktop editors 步骤的 phase 标记与 make.py 退出码。"
+  # A checkout exists, so a build was attempted here and produced nothing.
+  # This used to report the v8 egress block, which no longer applies:
+  # depot_tools is pinned into the image by docker/build-linux.Dockerfile and
+  # the pipeline has produced a .deb since. So this is a real build failure.
+  record 1.3 FAIL "本次构建未产出可执行文件" \
+    "上游检出存在但 $OUTBIN 不是 ELF 可执行文件。诊断：Build desktop editors 步骤的 phase 标记与 make.py 退出码。"
 fi
 
 if [ -x "$OUTBIN" ]; then
