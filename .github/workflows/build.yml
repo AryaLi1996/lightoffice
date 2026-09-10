@@ -192,13 +192,69 @@ jobs:
         env:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
         run: |
-          scripts/package.sh --version "1.0.0+git${GITHUB_SHA::7}" \
-            --compress-type gzip --compress-level 1
+          # No --compress-type gzip --compress-level 1 any more. That was chosen
+          # to make CI packaging fast, and it is the worst possible setting for
+          # the thing that now matters: AC V.3 caps the installer at 120MB and
+          # the gzip -1 .deb came out at 1052 MiB. package.sh defaults to xz,
+          # which costs packaging minutes and buys back a large fraction of the
+          # size for free. Time it, so the trade is a measured number rather than
+          # an assumption.
+          t0=$SECONDS
+          scripts/package.sh --version "1.0.0+git${GITHUB_SHA::7}"
+          echo "packaging took $((SECONDS - t0))s"
 
       # A build that ran and then produced nothing is a green check that means
       # nothing. package.sh exits 0 when there is no build output, so without
       # this the job would go green having packaged air -- which is exactly how
       # the wrong binary path stayed invisible for as long as it did.
+      # AC V.3 caps the installer at 120MB; the first one built came out at
+      # 1052 MiB. Before cutting anything, find out what is actually in there.
+      # package.sh stages `cp -a` of upstream's whole deploy directory, so the
+      # payload is exactly that tree and nothing is excluded today.
+      #
+      # This is read-only and takes seconds. Guessing at CEF vs Qt vs fonts and
+      # cutting the wrong one costs a 50-minute cycle to find out.
+      - name: Profile the installer payload
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          set +e
+          dir="$LIGHTOFFICE_SRC/build_tools/out/linux_64/onlyoffice/desktopeditors"
+          [ -d "$dir" ] || { echo "::warning::no deploy dir at $dir"; exit 0; }
+          {
+            echo "### Installer payload profile"
+            echo
+            echo "Uncompressed deploy tree: **$(du -sh "$dir" | cut -f1)**"
+            deb=$(find artifacts -maxdepth 1 -name 'WPS-Lite-*.deb' | head -1)
+            if [ -n "$deb" ]; then
+              echo "Packaged .deb: **$(du -h "$deb" | cut -f1)** (AC V.3 limit: 120MB)"
+            fi
+            echo
+            echo '#### Top 25 directories'
+            echo '```'
+            du -h --max-depth=2 "$dir" 2>/dev/null | sort -hr | head -25 \
+              | sed "s#$dir#.#"
+            echo '```'
+            echo
+            echo '#### Top 25 individual files'
+            echo '```'
+            find "$dir" -type f -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -25 \
+              | awk -v d="$dir" '{ sub(d,".",$2); printf "%8.1f MiB  %s\n", $1/1048576, $2 }'
+            echo '```'
+            echo
+            echo '#### By file type'
+            echo '```'
+            find "$dir" -type f -printf '%s\t%f\n' 2>/dev/null \
+              | awk -F'\t' '{ n=$2; ext=(n ~ /\./) ? tolower(substr(n, match(n,/\.[^.]*$/))) : "(none)";
+                               sz[ext]+=$1; cnt[ext]++ }
+                             END { for (e in sz) printf "%10.1f MiB  %6d  %s\n", sz[e]/1048576, cnt[e], e }' \
+              | sort -rn | head -20
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Verify the build produced an installer
         shell: bash
         run: |
