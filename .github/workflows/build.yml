@@ -11,7 +11,19 @@ permissions:
 jobs:
   build-linux:
     name: Build Linux
-    runs-on: ubuntu-22.04
+    # MUST match the image's base (FROM ubuntu:24.04). The image's prebuilt
+    # shared libraries are compiled against its glibc, and linking them on an
+    # older runner fails on symbols that do not exist there. On ubuntu-22.04
+    # (glibc 2.35) run 34380149207 died linking x2t after 21m41s:
+    #
+    #   ld: libdoctrenderer.so: undefined reference to `__isoc23_strtoll'
+    #   ld: libicuuc.so.74: undefined reference to `__isoc23_strtol@GLIBC_2.38'
+    #   ld: libicuuc.so.74: undefined reference to `arc4random@GLIBC_2.36'
+    #
+    # __isoc23_* are @@GLIBC_2.38 and arc4random is @GLIBC_2.36; 22.04 has
+    # neither. release.yml runs on ubuntu-latest (24.04), which is why its build
+    # reached the deploy stage while this one could not link core/.
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -76,7 +88,9 @@ jobs:
             echo "::notice::no prebuilt image at $repo:$tag -- building everything from source"
             echo "hit=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
-          docker run --rm "$repo:$tag" cat /etc/lightoffice-build-image || true
+          docker run --rm "$repo:$tag" cat /etc/lightoffice-build-image \
+            > /tmp/image-manifest.txt 2>/dev/null || true
+          cat /tmp/image-manifest.txt || true
 
           echo "disk before copy:"; df -h / | tail -1
           sudo mkdir -p /opt/lightoffice
@@ -103,6 +117,24 @@ jobs:
             sudo rm -rf /opt/lightoffice/src
             echo "hit=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          # The check that turns the 21m41s link failure into a two-second one.
+          # The manifest records the image's base (base=ubuntu:24.04); if this
+          # runner is a different release its glibc differs and the prebuilt .so
+          # files will not link. Read it from the manifest captured above, not by
+          # running the image again -- docker rmi has already dropped it.
+          base="$(sed -n 's/^base=//p' /tmp/image-manifest.txt | head -1)"
+          runner="$(. /etc/os-release; echo "$ID:$VERSION_ID")"
+          if [ -z "$base" ]; then
+            echo "::warning::image manifest records no base -- cannot check it against this runner"
+          elif [ "$base" != "$runner" ]; then
+            echo "::error::this runner is $runner but the prebuilt image was built on $base"
+            echo "::error::the image's shared libraries link against its glibc, so they will not link here"
+            echo "::error::run this job on a runner matching $base"
+            exit 1
+          else
+            echo "runner $runner matches the image base"
+          fi
+
           echo "prebuilt tree has every path the build needs"
           echo "hit=true" >> "$GITHUB_OUTPUT"
 
