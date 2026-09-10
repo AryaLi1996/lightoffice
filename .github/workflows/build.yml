@@ -318,11 +318,19 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Guarded rather than deleted: when the native build above starts
-      # producing artifacts/, this uploads them with no further change. Without
-      # the guard it runs on an empty directory and warns on every single run,
-      # which is exactly the noise that made the gap easy to miss.
+      # producing artifacts/, this uploads them with no further change.
+      #
+      # The pattern is WPS-Lite-* and NOT artifacts/**. The first guard I wrote
+      # used artifacts/** and did not work: artifacts/.gitkeep is tracked
+      # (.gitignore keeps the directory with /artifacts/* plus
+      # !/artifacts/.gitkeep), so after checkout the directory always contains
+      # one file, hashFiles returned a hash, the condition was true, and the
+      # step ran anyway — then upload-artifact skipped .gitkeep as a hidden file
+      # and warned "No files were found" exactly as before. Observed in run
+      # 34432524996. Matching the installer names instead tests for the thing we
+      # actually mean, and cannot be satisfied by a placeholder file.
       - name: Upload Windows artifacts
-        if: hashFiles('artifacts/**') != ''
+        if: hashFiles('artifacts/WPS-Lite-*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: windows-artifacts
@@ -385,8 +393,10 @@ jobs:
             echo "anything meant to be distributed)."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # See the Windows upload above for why this matches WPS-Lite-* rather
+      # than artifacts/**.
       - name: Upload macOS artifacts
-        if: hashFiles('artifacts/**') != ''
+        if: hashFiles('artifacts/WPS-Lite-*') != ''
         uses: actions/upload-artifact@v4
         with:
           name: macos-artifacts
