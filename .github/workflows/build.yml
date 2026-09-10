@@ -397,7 +397,7 @@ jobs:
             echo "Uncompressed deploy tree: **$(du -sh "$dir" | cut -f1)**"
             deb=$(find artifacts -maxdepth 1 -name 'WPS-Lite-*.deb' | head -1)
             if [ -n "$deb" ]; then
-              echo "Packaged .deb: **$(du -h "$deb" | cut -f1)** (AC V.3 limit: ${LIGHTOFFICE_MAX_INSTALLER_MB:-500}MB)"
+              echo "Packaged .deb: **$(du -h "$deb" | cut -f1)** (AC V.3 limit: ${LIGHTOFFICE_MAX_INSTALLER_MB:-650}MB)"
             fi
             echo
             echo '#### Top 25 directories'
