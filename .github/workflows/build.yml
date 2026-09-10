@@ -217,6 +217,77 @@ jobs:
           scripts/package.sh --version "1.0.0+git${GITHUB_SHA::7}"
           echo "packaging took $((SECONDS - t0))s"
 
+      - name: Verify the build produced an installer
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=(artifacts/WPS-Lite-*)
+          if [ ${#found[@]} -eq 0 ]; then
+            echo "::error::the build and packaging steps succeeded but produced no installer in artifacts/"
+            exit 1
+          fi
+          for f in "${found[@]}"; do
+            printf 'produced: %s (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
+          done
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: artifacts/
+          retention-days: 30
+
+      # scripts/verify_ac.sh has never once run against a real artifact. Eleven
+      # of its criteria have only ever reported BLOCKED, not because they fail
+      # but because there was nothing to measure -- no binary, no installer.
+      # Run 34421271035 produced both, so they can finally be evaluated.
+      #
+      # It runs HERE and not anywhere else because this is the only place all
+      # three inputs coexist: the packaged .deb in artifacts/, the built tree at
+      # /opt/lightoffice/src that find_binary() searches, and an OS matching the
+      # one the binary was linked against. Pulling the artifact down to a dev
+      # container is not an option -- the egress policy denies the Actions
+      # artifact blob host (403 on CONNECT to *.blob.core.windows.net).
+      #
+      # After the upload, and continue-on-error, on purpose. The artifact is
+      # already safely stored by this point, and a genuine FAIL here is a
+      # finding to read rather than a reason to redden a build that produced a
+      # valid installer. Installer size is the likely one: the .deb is 1052 MiB
+      # against a criterion that expects far less.
+      - name: Acceptance criteria against the real artifact
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          set +e
+          # Bounded: several criteria probe the network (Nextcloud, Document
+          # Server) and others walk a 29 GB tree. Locally this took over two
+          # minutes; a pathological case must not sit on the job.
+          timeout 900 scripts/verify_ac.sh --json baseline/ac_report.json 2>&1 | tee /tmp/ac.log
+          rc=${PIPESTATUS[0]}
+          [ "$rc" -eq 124 ] && echo "::warning::verify_ac.sh hit the 900s timeout"
+          echo "verify_ac.sh exit: $rc"
+          {
+            echo "### Acceptance criteria (first run against a real artifact)"
+            echo
+            echo '```'
+            # The summary line plus every row that is not a plain PASS: those
+            # are the ones worth a human's attention.
+            grep -E 'FAIL|BLOCKED|ADJUSTED|SKIPPED|汇总' /tmp/ac.log || cat /tmp/ac.log
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # These two run LAST, after the artifact upload, and that placement is
+      # deliberate. They used to sit right after packaging, which put roughly
+      # 110 lines of the 786 MiB upload's "Uploaded bytes" between their output
+      # and the end of the job log — far enough back that reading the log tail
+      # could not reach them, so run #15 produced both and neither could be
+      # read. Diagnostics belong where they can actually be recovered.
+      #
+      # Nothing downstream consumes them, so ordering costs nothing: both are
+      # read-only and continue-on-error.
       # A build that ran and then produced nothing is a green check that means
       # nothing. package.sh exits 0 when there is no build output, so without
       # this the job would go green having packaged air -- which is exactly how
@@ -354,68 +425,6 @@ jobs:
               --include='*.pro' --include='*.pri' --include='*.gn' --include='*.gni' \
               --include='Makefile' --include='*.conf' 2>/dev/null | head -20
             echo '(end)'
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      - name: Verify the build produced an installer
-        shell: bash
-        run: |
-          shopt -s nullglob
-          found=(artifacts/WPS-Lite-*)
-          if [ ${#found[@]} -eq 0 ]; then
-            echo "::error::the build and packaging steps succeeded but produced no installer in artifacts/"
-            exit 1
-          fi
-          for f in "${found[@]}"; do
-            printf 'produced: %s (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
-          done
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-artifacts
-          path: artifacts/
-          retention-days: 30
-
-      # scripts/verify_ac.sh has never once run against a real artifact. Eleven
-      # of its criteria have only ever reported BLOCKED, not because they fail
-      # but because there was nothing to measure -- no binary, no installer.
-      # Run 34421271035 produced both, so they can finally be evaluated.
-      #
-      # It runs HERE and not anywhere else because this is the only place all
-      # three inputs coexist: the packaged .deb in artifacts/, the built tree at
-      # /opt/lightoffice/src that find_binary() searches, and an OS matching the
-      # one the binary was linked against. Pulling the artifact down to a dev
-      # container is not an option -- the egress policy denies the Actions
-      # artifact blob host (403 on CONNECT to *.blob.core.windows.net).
-      #
-      # After the upload, and continue-on-error, on purpose. The artifact is
-      # already safely stored by this point, and a genuine FAIL here is a
-      # finding to read rather than a reason to redden a build that produced a
-      # valid installer. Installer size is the likely one: the .deb is 1052 MiB
-      # against a criterion that expects far less.
-      - name: Acceptance criteria against the real artifact
-        continue-on-error: true
-        shell: bash
-        env:
-          LIGHTOFFICE_SRC: /opt/lightoffice/src
-        run: |
-          set +e
-          # Bounded: several criteria probe the network (Nextcloud, Document
-          # Server) and others walk a 29 GB tree. Locally this took over two
-          # minutes; a pathological case must not sit on the job.
-          timeout 900 scripts/verify_ac.sh --json baseline/ac_report.json 2>&1 | tee /tmp/ac.log
-          rc=${PIPESTATUS[0]}
-          [ "$rc" -eq 124 ] && echo "::warning::verify_ac.sh hit the 900s timeout"
-          echo "verify_ac.sh exit: $rc"
-          {
-            echo "### Acceptance criteria (first run against a real artifact)"
-            echo
-            echo '```'
-            # The summary line plus every row that is not a plain PASS: those
-            # are the ones worth a human's attention.
-            grep -E 'FAIL|BLOCKED|ADJUSTED|SKIPPED|汇总' /tmp/ac.log || cat /tmp/ac.log
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
