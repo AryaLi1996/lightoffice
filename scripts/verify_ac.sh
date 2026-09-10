@@ -577,18 +577,29 @@ else
   fi
 fi
 
-# --- 安装包体积 ≤120MB ------------------------------------------------------
+# --- 安装包体积上限 ---------------------------------------------------------
+# 上限从 120MB 改为 500MB，由项目负责人于 2026-09-10 明确决定（"I can accept
+# 500mb"）。改的是判据本身，不是判据的算法，所以这里如实记录理由：
+#
+# 原始的 120MB 对本架构不可达。应用自身的 DesktopEditors 二进制只有 2.5MB，但
+# 它内嵌 CEF（Chromium）——fetch_prebuilts.sh 记录 "CEF staged (365M)"——只要编
+# 辑器仍在内嵌浏览器里渲染，这部分就是无法裁掉的地板。上游 ONLYOFFICE 官方桌面
+# 安装包本身也在 250-400MB 量级。用 120MB 去要求一个内嵌 Chromium 的套件，等于
+# 要求换一个架构，而不是要求做体积优化。
+#
+# 阈值可用 LIGHTOFFICE_MAX_INSTALLER_MB 覆盖，便于日后再收紧或临时试验。
+MAX_MB="${LIGHTOFFICE_MAX_INSTALLER_MB:-500}"
 deb=$(find "$ROOT/artifacts" -maxdepth 1 -name '*.deb' -o -maxdepth 1 -name '*.exe' -o -maxdepth 1 -name '*.dmg' 2>/dev/null | head -1)
 if [ -n "$deb" ] && [ -f "$deb" ]; then
   bytes=$(file_bytes "$deb")
   mb=$(awk -v b="$bytes" 'BEGIN{printf "%.1f", b/1048576}')
-  if awk -v b="$bytes" 'BEGIN{exit !(b <= 120*1048576)}'; then
-    record V.3 PASS "安装包体积 ${mb}MB ≤ 120MB" "$(basename "$deb")"
+  if awk -v b="$bytes" -v m="$MAX_MB" 'BEGIN{exit !(b <= m*1048576)}'; then
+    record V.3 PASS "安装包体积 ${mb}MB ≤ ${MAX_MB}MB" "$(basename "$deb")"
   else
-    record V.3 FAIL "安装包体积 ${mb}MB 超过 120MB 上限" "$(basename "$deb")"
+    record V.3 FAIL "安装包体积 ${mb}MB 超过 ${MAX_MB}MB 上限" "$(basename "$deb")"
   fi
 else
-  record V.3 BLOCKED "安装包体积校验需要先产出安装包" \
+  record V.3 BLOCKED "安装包体积校验需要先产出安装包（上限 ${MAX_MB}MB）" \
     "依赖 AC 1.3 的构建产物与 AC 5.1 的打包；artifacts/ 中没有 .deb/.exe/.dmg"
 fi
 
