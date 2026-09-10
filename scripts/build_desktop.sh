@@ -457,6 +457,13 @@ if [ -n "$BIN" ] && [ -x "$BIN" ]; then
   "$ROOT/scripts/fix_stdcxx_statics.sh" "$(dirname "$BIN")" || \
     bad "libstdc++ static repair failed — the app will not launch"
   phase_end
+  # LAST, and it must stay last. Deduplication makes identical files share one
+  # inode, so any later tool that writes in place would write through every
+  # link at once. strip and patchelf both run above for exactly that reason.
+  phase_begin "deduplicate deploy tree"
+  "$ROOT/scripts/dedupe_deploy_tree.sh" "$(dirname "$BIN")" || \
+    bad "deduplication failed — the installer will be larger than it needs to be"
+  phase_end
 else
   bad "no DesktopEditors binary produced"
 fi
