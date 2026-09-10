@@ -276,7 +276,7 @@ jobs:
             # are the ones worth a human's attention.
             grep -E 'FAIL|BLOCKED|ADJUSTED|SKIPPED|汇总' /tmp/ac.log || cat /tmp/ac.log
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
 
       # These two run LAST, after the artifact upload, and that placement is
@@ -483,7 +483,7 @@ jobs:
             echo "\`build_tools/tools/linux\` only and exits 2 on any other host."
             echo
             echo "Needs: a Windows host with the MSVC toolchain and Inno Setup."
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Guarded rather than deleted: when the native build above starts
       # producing artifacts/, this uploads them with no further change.
@@ -593,7 +593,7 @@ jobs:
               echo "could not compile a test binary"
             fi
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Report that no macOS installer is produced yet
@@ -605,15 +605,27 @@ jobs:
             echo
             echo "This job is a placeholder. It does **not** build anything."
             echo
-            echo "\`scripts/package.sh\` already knows how to package on macOS —"
-            echo "it invokes upstream's \`desktop-apps/macos/package_mac.py\`. What is"
-            echo "missing is the *build* that must run before it:"
-            echo "\`scripts/build_desktop.sh\` drives \`build_tools/tools/linux\` only and"
-            echo "exits 2 on any other host."
+            echo "Two things this text used to get wrong, corrected here:"
             echo
-            echo "Needs: a macOS host with Xcode and codesign (and notarization for"
-            echo "anything meant to be distributed)."
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "1. \`scripts/package.sh\` did **not** know how to package on macOS."
+            echo "   It invoked \`desktop-apps/macos/package_mac.py\`, which does not"
+            echo "   exist in upstream at the pinned revision. That call is gone."
+            echo "2. Notarization is **not** required. Distribution here is fleet-only,"
+            echo "   so ad-hoc signing (\`codesign -s -\`) is the target and no Apple"
+            echo "   Developer account is needed. The step above proves the runner"
+            echo "   accepts the ad-hoc identity."
+            echo
+            echo "What is actually missing is the build. The macOS build is **not**"
+            echo "the qmake pipeline \`scripts/build_desktop.sh\` drives — that is Linux"
+            echo "only and exits 2 elsewhere. Upstream builds macOS from"
+            echo "\`desktop-apps/macos/ONLYOFFICE.xcodeproj\` via fastlane lanes"
+            echo "(\`release_arm\`, \`release_x86_64\`, \`release_v8\`), and"
+            echo "\`build_tools/tools/mac\` holds only \`7za\` and \`toolchain.prf\`."
+            echo
+            echo "So the port is: run the fastlane lane, replace its"
+            echo "\`gym(export_method: 'developer-id')\` + \`notarize()\` with ad-hoc"
+            echo "signing, and keep its \`npx appdmg\` step, which needs no Apple account."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # See the Windows upload above for why this matches WPS-Lite-* rather
       # than artifacts/**.
