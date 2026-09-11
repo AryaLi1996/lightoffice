@@ -124,11 +124,32 @@ if [ -z "$BIN" ] || [ ! -x "$BIN" ]; then
 fi
 
 # ------------------------------------------------------------ direct input ---
-echo "launching $BIN on $DISPLAY"
-"$BIN" >/tmp/ime_app.log 2>&1 &
+# Launch WITH A DOCUMENT. Run 34575866221 reported
+#
+#   V.5 FAIL  typed '中文输入测试' but the document returned ''
+#
+# and the empty string was the giveaway: with no argument DesktopEditors opens
+# its start screen, not an editor. There is nowhere for the characters to go,
+# and select-all/copy on that screen returns nothing. The test was measuring
+# the absence of a document, not the handling of Chinese text.
+#
+# Pass a real .docx so there is a document to type into. tests/fixtures has one
+# already (it is what the collaboration tests use); fall back to launching bare
+# and say so, rather than silently testing the start screen again.
+DOC="${LIGHTOFFICE_IME_DOC:-$ROOT/tests/fixtures/collab.docx}"
+if [ -f "$DOC" ]; then
+  work="$(mktemp -d)"
+  cp "$DOC" "$work/ime.docx"
+  DOC="$work/ime.docx"   # a copy: the test types into it and must not dirty the fixture
+  echo "launching $BIN on $DISPLAY with $DOC"
+  "$BIN" "$DOC" >/tmp/ime_app.log 2>&1 &
+else
+  echo "launching $BIN on $DISPLAY (no document fixture at $DOC)"
+  "$BIN" >/tmp/ime_app.log 2>&1 &
+fi
 APP=$!
-# shellcheck disable=SC2064  # expand APP now: it is the pid we want to kill
-trap "kill $APP 2>/dev/null" EXIT
+# shellcheck disable=SC2064  # expand APP and work now: these are the ones to clean up
+trap "kill $APP 2>/dev/null; rm -rf ${work:-/nonexistent}" EXIT
 
 WIN=""
 for _ in $(seq 1 30); do
@@ -143,16 +164,34 @@ if [ -z "$WIN" ]; then
 fi
 
 xdotool windowactivate --sync "$WIN" 2>/dev/null
-sleep 2
-xdotool type --window "$WIN" --delay 120 -- "$TEXT"
-sleep 2
+# The window appears well before the document is editable: the editor is a web
+# application loading inside CEF, and the 2s that used to be here was a guess
+# that the first run showed to be wrong. Wait for the canvas to actually accept
+# a click, then give the document a moment to take focus.
+sleep 12
+xdotool windowactivate --sync "$WIN" 2>/dev/null
+# Click into the body of the document. Typing at a window with no caret goes
+# nowhere, which is indistinguishable from the application refusing the text.
+eval "$(xdotool getwindowgeometry --shell "$WIN" 2>/dev/null)"
+if [ -n "${WIDTH:-}" ] && [ -n "${HEIGHT:-}" ]; then
+  xdotool mousemove --window "$WIN" $((WIDTH / 2)) $((HEIGHT / 2)) click 1 2>/dev/null
+  sleep 2
+fi
+# NOTE: no --window on the type/key calls below, deliberately. --window
+# delivers keystrokes with XSendEvent, and Chromium -- which is what CEF is --
+# ignores synthetic events with send_event set. The keys would be sent, xdotool
+# would report success, and the editor would never see them, which matches what
+# the first run observed exactly. Without --window xdotool uses XTEST, which
+# arrives as real input; that is why the window is activated first.
+xdotool type --delay 120 -- "$TEXT"
+sleep 3
 
 # Read the text back rather than trusting that the keystrokes landed. The editor
 # paints to a canvas, so the check is against the accessibility tree / clipboard:
 # select all, copy, and inspect the X selection.
-xdotool key --window "$WIN" --clearmodifiers ctrl+a
+xdotool key --clearmodifiers ctrl+a
 sleep 1
-xdotool key --window "$WIN" --clearmodifiers ctrl+c
+xdotool key --clearmodifiers ctrl+c
 sleep 1
 GOT=""
 if command -v xclip >/dev/null; then GOT="$(xclip -selection clipboard -o 2>/dev/null || true)"
@@ -192,16 +231,16 @@ if [ "$IME" = ibus ] && command -v ibus >/dev/null; then
 fi
 
 xdotool windowactivate --sync "$WIN" 2>/dev/null
-xdotool key --window "$WIN" --clearmodifiers ctrl+a
-xdotool key --window "$WIN" --clearmodifiers Delete
+xdotool key --clearmodifiers ctrl+a
+xdotool key --clearmodifiers Delete
 sleep 1
 # Latin pinyin in — the IME is what must turn it into Chinese.
-xdotool type --window "$WIN" --delay 200 -- "zhongwen"
+xdotool type --delay 200 -- "zhongwen"
 sleep 2
-xdotool key --window "$WIN" --clearmodifiers space
+xdotool key --clearmodifiers space
 sleep 2
-xdotool key --window "$WIN" --clearmodifiers ctrl+a
-xdotool key --window "$WIN" --clearmodifiers ctrl+c
+xdotool key --clearmodifiers ctrl+a
+xdotool key --clearmodifiers ctrl+c
 sleep 1
 GOT2=""
 command -v xclip >/dev/null && GOT2="$(xclip -selection clipboard -o 2>/dev/null || true)"
