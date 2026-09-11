@@ -115,6 +115,29 @@ if command -v xcodebuild >/dev/null; then
 else
   bad "xcodebuild not found — install Xcode (the Command Line Tools alone are not enough)"; fatal=1
 fi
+# CMake 4 removed support for pre-3.5 CMakeLists, and core vendors an x265
+# revision that needs them. Run 34575866221 spent 22 minutes reaching that
+# failure; a preflight that does not check the toolchain versions it depends on
+# is why. Check it here, where it costs nothing.
+if command -v cmake >/dev/null; then
+  cmake_ver="$(cmake --version 2>/dev/null | head -1 | sed 's/[^0-9.]*//;s/ .*//')"
+  cmake_major="${cmake_ver%%.*}"
+  # A version string this does not understand (a nightly, say) must not read as
+  # "fine": `[ "$x" -ge 4 ]` errors on a non-number and, with the error hidden,
+  # would silently pass. Say it is unknown instead.
+  case "$cmake_major" in
+    ''|*[!0-9]*) warn "could not parse a cmake version from '$cmake_ver' — cannot tell whether it is a 4.x"; cmake_major=0 ;;
+  esac
+  if [ "$cmake_major" -ge 4 ]; then
+    bad "cmake $cmake_ver — CMake 4 cannot configure core's vendored x265 (needs policies CMP0025/CMP0054 that 4.x removed)"
+    echo "      install a 3.x and put it first on PATH; 3.31.7 is the last one." >&2
+    fatal=1
+  else
+    ok "cmake $cmake_ver"
+  fi
+else
+  bad "cmake not found"; fatal=1
+fi
 command -v codesign >/dev/null && ok "codesign" || { bad "codesign not found"; fatal=1; }
 command -v hdiutil  >/dev/null && ok "hdiutil"  || { bad "hdiutil not found";  fatal=1; }
 command -v npx      >/dev/null && ok "npx (for appdmg)" || warn "npx not found — the .dmg step will be skipped"

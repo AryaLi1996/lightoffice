@@ -702,6 +702,47 @@ jobs:
           brew install qt@5 || brew install qt5 || true
           echo "qt prefix: $(brew --prefix qt@5 2>/dev/null || echo 'not installed')"
 
+      # CMake 4 removed compatibility with pre-3.5 CMakeLists, and the runner
+      # ships 4.4.3. Run 34575866221 got 22 minutes into make.py and died in
+      # core's vendored x265 (pulled in by the heif module):
+      #
+      #   Policy CMP0025 may not be set to OLD behavior because this version of
+      #   CMake no longer supports it.
+      #   Compatibility with CMake < 3.5 has been removed from CMake.
+      #
+      # That is not our code and not upstream ONLYOFFICE's either -- it is a
+      # third-party library pinned at a revision written for CMake 2.x, so it
+      # cannot be fixed forward from here without forking it.
+      #
+      # CMake's own message suggests -DCMAKE_POLICY_VERSION_MINIMUM=3.5, but the
+      # cmake invocations are inside upstream's python build driver, not ours to
+      # add flags to; the environment variable of the same name would reach them
+      # but only exists in CMake >= 4.0, so relying on it means relying on the
+      # very version that broke this. Supplying a CMake that still supports
+      # those policies needs no cooperation from either.
+      #
+      # 3.31.7 is the last 3.x. Homebrew keeps no old cmake formula, so take
+      # Kitware's own macOS universal tarball and verify it: a build toolchain
+      # fetched over the network without a checksum is an unpinned dependency,
+      # which is the trap build_tools/depot_tools already sprang once here.
+      - name: Pin CMake to the last 3.x (CMake 4 cannot build vendored x265)
+        shell: bash
+        run: |
+          ver=3.31.7
+          want=1cb11aa2edae8551bb0f22807c6f5246bd0eb60ae9fa1474781eb4095d299aca
+          url="https://github.com/Kitware/CMake/releases/download/v$ver/cmake-$ver-macos-universal.tar.gz"
+          curl -fsSL --retry 3 -o /tmp/cmake.tgz "$url"
+          got=$(shasum -a 256 /tmp/cmake.tgz | cut -d' ' -f1)
+          if [ "$got" != "$want" ]; then
+            echo "::error::cmake tarball checksum mismatch: got $got, want $want"
+            exit 1
+          fi
+          tar -xzf /tmp/cmake.tgz -C /tmp
+          bin="/tmp/cmake-$ver-macos-universal/CMake.app/Contents/bin"
+          [ -x "$bin/cmake" ] || { echo "::error::no cmake at $bin"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "pinned: $("$bin/cmake" --version | head -1) (was $(cmake --version | head -1))"
+
       - name: Bootstrap the upstream tree
         shell: bash
         env:
