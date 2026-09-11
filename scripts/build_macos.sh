@@ -90,8 +90,11 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 2
 fi
 
-if [ "$ARCH" = arm64 ] && [ "$(uname -m)" != "arm64" ]; then
-  warn "building arm64 on $(uname -m); this is a cross build and has not been exercised"
+# Either direction is a cross build, and both are worth saying out loud: the
+# host toolchain is happy to compile for the other architecture, so nothing
+# complains until a dependency built for the host arch refuses to link.
+if [ "$ARCH" != "$(uname -m)" ]; then
+  warn "building $ARCH on $(uname -m) — cross build; every dependency (Qt, ICU, CEF) must be $ARCH too"
 fi
 
 # 1. The upstream tree.
@@ -167,7 +170,27 @@ if [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
       rm -f "$QT_DIR/clang_64"
       ln -s "$QT_PREFIX" "$QT_DIR/clang_64"
     fi
-    ok "Qt $qt_ver at $QT_PREFIX (exposed as $QT_DIR/clang_64)"
+    # Qt's OWN architecture must match the target. An x86_64 Qt on an arm64
+    # build (or the reverse) is the same class of failure the ICU mismatch was:
+    # the compile succeeds and the link dies with every Qt symbol undefined,
+    # which reads like a missing Qt rather than the wrong one. Naming it here
+    # costs a second; finding it at the link cost 18 minutes last time.
+    qt_core="$(ls "$QT_PREFIX"/lib/QtCore.framework/Versions/*/QtCore \
+                  "$QT_PREFIX"/lib/libQt5Core.dylib 2>/dev/null | head -1)"
+    if [ -n "$qt_core" ]; then
+      qt_archs="$(lipo -archs "$qt_core" 2>/dev/null || true)"
+      case " $qt_archs " in
+        *" $ARCH "*) ok "Qt $qt_ver [$qt_archs] at $QT_PREFIX (exposed as $QT_DIR/clang_64)" ;;
+        "  ")        warn "could not read Qt's architecture from $qt_core — proceeding unverified" ;;
+        *) bad "Qt at $QT_PREFIX is [$qt_archs] but this build targets $ARCH"
+           echo "      install a $ARCH Qt and point LIGHTOFFICE_QT_PREFIX at it." >&2
+           echo "      on an arm64 host an x86_64 Qt comes from Rosetta Homebrew:" >&2
+           echo "        arch -x86_64 /usr/local/bin/brew install qt@5" >&2
+           fatal=1 ;;
+      esac
+    else
+      warn "no QtCore found under $QT_PREFIX/lib — cannot verify Qt's architecture"
+    fi
   else
     bad "qmake at $QT_PREFIX/bin/qmake did not report a version"; fatal=1
   fi

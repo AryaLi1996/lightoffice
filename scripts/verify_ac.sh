@@ -470,7 +470,12 @@ section "Ticket 5 — 打包、系统测试与文档交付"
 
 ART="$ROOT/artifacts"
 have=0
-for f in WPS-Lite-win-x64.exe WPS-Lite-win-x64.msi WPS-Lite-mac-universal.dmg WPS-Lite-linux-amd64.deb; do
+# WPS-Lite-mac-universal.dmg was in this list and is produced by nothing: the
+# macOS build emits one .dmg per architecture (scripts/build_macos.sh). Counting
+# a file no step creates can only ever undercount.
+for f in WPS-Lite-win-x64.exe WPS-Lite-win-x64.msi \
+         WPS-Lite-macos-arm64.dmg WPS-Lite-macos-x86_64.dmg \
+         WPS-Lite-linux-amd64.deb; do
   [ -f "$ART/$f" ] && have=$((have+1))
 done
 if [ "$have" -ge 3 ] && [ -f "$ART/checksums.txt" ]; then
