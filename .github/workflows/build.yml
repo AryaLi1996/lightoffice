@@ -609,6 +609,29 @@ jobs:
           } | tee -a "$GITHUB_STEP_SUMMARY"
           exit 0
 
+      # The real macOS build is a long pole: ONLYOFFICE.xcodeproj is only the
+      # Cocoa shell and needs build_tools/out/mac_arm64 to exist first, which on
+      # macOS means building the core from scratch every run — there is no
+      # prebuilt-tree image on macOS the way there is on Linux.
+      #
+      # This proves the part that is unique to macOS and cheap to test: whether
+      # ad-hoc signing yields something a fleet Mac will run, and whether the
+      # .dmg step works once Ascensio's hardcoded Developer ID is out of the
+      # picture. If either answers no, the core build would have been wasted.
+      - name: Prove the macOS signing and packaging path
+        continue-on-error: true
+        shell: bash
+        run: |
+          scripts/macos_packaging_spike.sh "$RUNNER_TEMP/spike" 2>&1 | tee "$RUNNER_TEMP/spike.log"
+          {
+            echo "### macOS signing and packaging spike"
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/spike.log"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       - name: Report that no macOS installer is produced yet
         shell: bash
         run: |
