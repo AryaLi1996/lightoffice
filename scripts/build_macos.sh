@@ -61,9 +61,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# PLATFORM is what configure.py is told to build; OUT_DIR is where it lands.
+# They must agree, and the default does not.
 case "$ARCH" in
-  arm64)  OUT_DIR="mac_arm64"; SCHEME="ONLYOFFICE-arm" ;;
-  x86_64) OUT_DIR="mac_64";    SCHEME="ONLYOFFICE-x86_64" ;;
+  arm64)  PLATFORM="mac_arm64"; OUT_DIR="mac_arm64"; SCHEME="ONLYOFFICE-arm" ;;
+  x86_64) PLATFORM="mac_64";    OUT_DIR="mac_64";    SCHEME="ONLYOFFICE-x86_64" ;;
   *) echo "unknown --arch $ARCH (expected arm64 or x86_64)" >&2; exit 2 ;;
 esac
 
@@ -186,9 +188,32 @@ echo
 echo "Running upstream build (this takes hours) ..."
 cd "$BUILD_TOOLS"
 
+# --platform is NOT optional here, though it looks it. It defaults to "native",
+# and build_tools/scripts/config.py expands that as:
+#
+#     bits = "32"
+#     if platform.machine().endswith('64'): bits = "64"
+#     ...
+#     options["platform"] += (" mac_" + bits)
+#
+# On Apple Silicon platform.machine() is "arm64", which ends with "64", so bits
+# becomes "64" and native resolves to mac_64 -- the x86_64 target -- on an arm64
+# machine. "native" can never produce mac_arm64.
+#
+# Run 34595493731 is what that costs: every third-party library built x86_64
+# into 3dParty/icu/mac_64 while the Qt side compiled arm64, and the link died
+# with every ICU symbol undefined:
+#
+#   ld: warning: ignoring file .../icu/mac_64/build/libicuuc.a, building for
+#       macOS-arm64 but attempting to link with file built for macOS-x86_64
+#   ld: symbol(s) not found for architecture arm64
+#
+# mac_arm64 is a real platform (config.py lists it) even though configure.py's
+# own --platform help text still says mac only offers mac_64.
 phase_begin configure
 python3 -u ./configure.py \
-    --branch master --module desktop --update 0 --qt-dir "$QT_DIR"
+    --branch master --module desktop --update 0 \
+    --platform "$PLATFORM" --qt-dir "$QT_DIR"
 phase_end
 
 phase_begin make.py
@@ -203,6 +228,30 @@ if [ ! -d "$CORE_OUT" ]; then
   exit 1
 fi
 ok "core built: $CORE_OUT ($(du -sh "$CORE_OUT" | cut -f1))"
+
+# Prove the core is the architecture we asked for. A build that quietly targets
+# the wrong one does not fail here -- it fails much later, at the link, with
+# every symbol of some third-party library undefined, which reads like a missing
+# dependency rather than an architecture mismatch. That is exactly how run
+# 34595493731 presented, and it cost 18 minutes to find out.
+want_arch="$ARCH"
+bad_arch=0
+while IFS= read -r lib; do
+  archs="$(lipo -archs "$lib" 2>/dev/null || true)"
+  [ -n "$archs" ] || continue
+  case " $archs " in
+    *" $want_arch "*) ;;
+    *) echo "  wrong architecture: $(basename "$lib") is [$archs], expected $want_arch" >&2
+       bad_arch=$((bad_arch + 1)) ;;
+  esac
+done <<EOF
+$(find "$CORE_OUT" -maxdepth 2 -type f \( -name '*.dylib' -o -name 'x2t' \) 2>/dev/null | head -20)
+EOF
+if [ "$bad_arch" -gt 0 ]; then
+  echo "$bad_arch built file(s) are not $want_arch — the core was built for the wrong target" >&2
+  exit 1
+fi
+ok "core is $want_arch"
 
 # ------------------------------------------------------------------- app ----
 # Ad-hoc from here down. See the header for why each override is set.
