@@ -69,7 +69,8 @@ jobs:
             libgtk-3-dev libglu1-mesa-dev libx11-xcb-dev libxi-dev \
             libxrender-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libnotify-dev libcups2-dev libdbus-1-dev libicu-dev \
-            libasound2-dev libatspi2.0-dev dpkg-dev patchelf binutils gifsicle
+            libasound2-dev libatspi2.0-dev dpkg-dev patchelf binutils gifsicle \
+            imagemagick
 
       - name: Free disk space
         run: |
@@ -233,12 +234,63 @@ jobs:
             printf 'produced: %s (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
           done
 
+      # AC V.4 wants a delivery archive and a manifest carrying the Git commit
+      # ID and the upstream pin. scripts/archive.sh has existed since the start
+      # and had simply never been wired into CI, so V.4 failed on every run for
+      # want of a caller. It must run AFTER packaging: the manifest enumerates
+      # the installers it finds in artifacts/, so running it first would produce
+      # a manifest with an empty "installers" list.
+      - name: Produce the delivery archive
+        shell: bash
+        run: |
+          scripts/archive.sh --version "1.0.0+git${GITHUB_SHA::7}"
+
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
           name: linux-artifacts
           path: artifacts/
           retention-days: 30
+
+      # AC V.5 has reported BLOCKED with a stale note ("no built application;
+      # v8 sources unreachable") since 2026-09-07, because baseline/ime.json is
+      # a checked-in file that nothing in CI ever refreshed. Both halves of that
+      # note are now false: the application builds and runs. Run the real check
+      # so V.5 reports what is actually true.
+      #
+      # This must come BEFORE the acceptance-criteria step, which only reads the
+      # JSON this produces.
+      #
+      # ime_test.sh reports the two levels separately and never lets the weaker
+      # stand in for the stronger, so an IME that fails to come up here degrades
+      # V.5 to ADJUSTED rather than faking a pass. Hence `|| true`: an honest
+      # BLOCKED is a result, not a build failure.
+      - name: Chinese input check under a headless X server
+        continue-on-error: true
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends \
+            xvfb xdotool xclip ibus ibus-libpinyin dbus-x11 || true
+
+          Xvfb :99 -screen 0 1280x1024x24 >/tmp/xvfb.log 2>&1 &
+          export DISPLAY=:99
+          for _ in $(seq 1 20); do
+            xdotool getdisplaygeometry >/dev/null 2>&1 && break
+            sleep 1
+          done
+
+          # Best effort. ibus needs a session bus and a configured engine; if
+          # either is missing the script says so instead of guessing.
+          eval "$(dbus-launch --sh-syntax)" || true
+          ibus-daemon -drx >/tmp/ibus.log 2>&1 || true
+          sleep 5
+          ibus engine libpinyin >/dev/null 2>&1 || ibus engine pinyin >/dev/null 2>&1 || true
+          echo "ibus engine: $(ibus engine 2>&1 || echo unavailable)"
+
+          scripts/ime_test.sh --display :99 || true
+          echo "--- baseline/ime.json ---"
+          cat baseline/ime.json || true
 
       # scripts/verify_ac.sh has never once run against a real artifact. Eleven
       # of its criteria have only ever reported BLOCKED, not because they fail
@@ -632,39 +684,77 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
-      - name: Report that no macOS installer is produced yet
+      # THE REAL BUILD. Until now this job only echoed; the spike above settled
+      # the signing and packaging questions, so what is left is producing
+      # build_tools/out/mac_arm64 and linking the Xcode project against it.
+      #
+      # Everything about the ad-hoc path -- the xcodebuild overrides, why the
+      # fastlane lane is bypassed, why appdmg.json's code-sign block is dropped
+      # -- is documented in scripts/build_macos.sh rather than repeated here.
+      #
+      # Qt: the runner has none (run 34560326333 reported `qmake: not installed`
+      # and `brew qt: not installed`), so install it. qt@5 rather than qt@6:
+      # desktop-apps at the pinned revision builds against Qt 5, the same as the
+      # Linux job's qtbase5-dev.
+      - name: Install macOS build dependencies
         shell: bash
         run: |
-          echo "::notice::macos: no installer produced — the native build is not implemented yet"
+          brew install qt@5 || brew install qt5 || true
+          echo "qt prefix: $(brew --prefix qt@5 2>/dev/null || echo 'not installed')"
+
+      - name: Bootstrap the upstream tree
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          sudo mkdir -p /opt/lightoffice
+          sudo chown -R "$(id -u):$(id -g)" /opt/lightoffice
+          scripts/bootstrap.sh
+          scripts/apply_overlay.sh
+
+      # Preflight first, as its own step. The build below takes hours, and a
+      # missing prerequisite that surfaces two hours in costs a whole runner for
+      # an answer that was available in ten seconds.
+      - name: Preflight the macOS build
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: scripts/build_macos.sh --check-only --arch arm64
+
+      - name: Build macOS (arm64), ad-hoc signed
+        id: macbuild
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: scripts/build_macos.sh --arch arm64
+
+      # This is a first attempt at a build nobody has run before. Say plainly
+      # whether it produced an installer instead of letting a green checkmark
+      # imply one: the placeholder this replaced reported success while
+      # producing nothing, which is the failure mode worth not repeating.
+      - name: Report the macOS build outcome
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=(artifacts/WPS-Lite-macos-*)
           {
-            echo "### macOS: no installer produced"
+            echo "### macOS build"
             echo
-            echo "This job is a placeholder. It does **not** build anything."
-            echo
-            echo "Two things this text used to get wrong, corrected here:"
-            echo
-            echo "1. \`scripts/package.sh\` did **not** know how to package on macOS."
-            echo "   It invoked \`desktop-apps/macos/package_mac.py\`, which does not"
-            echo "   exist in upstream at the pinned revision. That call is gone."
-            echo "2. Notarization is **not** required. Distribution here is fleet-only,"
-            echo "   so ad-hoc signing (\`codesign -s -\`) is the target and no Apple"
-            echo "   Developer account is needed. The step above proves the runner"
-            echo "   accepts the ad-hoc identity."
-            echo
-            echo "What is actually missing is the build. The macOS build is **not**"
-            echo "the qmake pipeline \`scripts/build_desktop.sh\` drives — that is Linux"
-            echo "only and exits 2 elsewhere. Upstream builds macOS from"
-            echo "\`desktop-apps/macos/ONLYOFFICE.xcodeproj\` via fastlane lanes"
-            echo "(\`release_arm\`, \`release_x86_64\`, \`release_v8\`), and"
-            echo "\`build_tools/tools/mac\` holds only \`7za\` and \`toolchain.prf\`."
-            echo
-            echo "So the port is: run the fastlane lane, replace its"
-            echo "\`gym(export_method: 'developer-id')\` + \`notarize()\` with ad-hoc"
-            echo "signing, and keep its \`npx appdmg\` step, which needs no Apple account."
+            if [ ${#found[@]} -gt 0 ]; then
+              for f in "${found[@]}"; do
+                printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -f%z "$f") / 1048576 ))"
+              done
+              echo
+              echo "Ad-hoc signed; no Apple Developer account and no notarization."
+            else
+              echo "No installer produced. The step above is \`continue-on-error\`"
+              echo "because this is the first run of a build that has never run"
+              echo "before -- read its log for the phase that stopped."
+              echo "::notice::macos: build did not produce an installer yet"
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      # See the Windows upload above for why this matches WPS-Lite-* rather
-      # than artifacts/**.
       - name: Upload macOS artifacts
         if: hashFiles('artifacts/WPS-Lite-*') != ''
         uses: actions/upload-artifact@v4
