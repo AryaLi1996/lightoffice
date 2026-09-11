@@ -176,15 +176,20 @@ esac
 # in that lane (`npx appdmg resources/appdmg.json`) needs no account at all and
 # is reusable as-is.
 #
-# Until that lane exists, say so rather than invoking a file that is not there.
+# That ad-hoc variant now exists as scripts/build_macos.sh, which drives the
+# whole macOS pipeline end to end: build_tools for the core, xcodebuild with
+# the signing settings overridden on the command line, then appdmg. It is not
+# invoked from here because it is a BUILD, not a packaging step -- this script
+# packages what is already built, and the macOS build takes hours. Point at it
+# instead of pretending the .dmg can be produced from the qmake output.
 if [ "$OS" = "Darwin" ]; then
-  echo "  skip .dmg — the macOS lane is not implemented yet"
-  echo "    upstream builds macOS from desktop-apps/macos/ONLYOFFICE.xcodeproj"
-  echo "    via fastlane, not from the qmake pipeline this script drives."
-  echo "    Its release lanes sign with a Developer ID and notarize; the"
-  echo "    fleet-only route needs an ad-hoc-signed variant instead."
+  echo "  skip .dmg — run scripts/build_macos.sh, which builds and packages it"
+  echo "    macOS is built from desktop-apps/macos/ONLYOFFICE.xcodeproj against"
+  echo "    build_tools/out/mac_arm64, not from the qmake pipeline this script"
+  echo "    drives. build_macos.sh signs ad-hoc (codesign -s -), so it needs no"
+  echo "    Apple Developer account and does not notarize."
 else
-  echo "  skip .dmg — needs a macOS host (Xcode; desktop-apps/macos)"
+  echo "  skip .dmg — needs a macOS host (Xcode; scripts/build_macos.sh)"
 fi
 
 # -------------------------------------------------------------- checksums ---

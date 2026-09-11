@@ -219,7 +219,17 @@ else
 fi
 
 SPLASH="$ROOT/overlay/branding/splash.png"
-if [ -f "$SPLASH" ] && command -v identify >/dev/null; then
+# Two very different causes used to collapse into one message ("启动图缺失或
+# identify 不可用"), which is why run 34560326333 read as a missing splash when
+# the real cause was that ImageMagick was not installed on the runner. The
+# image is 600x300 / 999 colours / 15477 B and has always satisfied the
+# criterion. Report the two apart.
+if [ ! -f "$SPLASH" ]; then
+  record 2.3 FAIL "启动图文件不存在" "$SPLASH"
+elif ! command -v identify >/dev/null; then
+  record 2.3 BLOCKED "无法校验启动图：identify (ImageMagick) 未安装" \
+    "文件存在（$(file_bytes "$SPLASH") 字节）但无法读取尺寸与颜色数。安装: apt-get install imagemagick"
+else
   dim=$(identify -format "%wx%h" "$SPLASH" 2>/dev/null)
   sz=$(file_bytes "$SPLASH")
   ck=$(cksum "$SPLASH" | awk '{print $1}')
@@ -242,8 +252,6 @@ if [ -f "$SPLASH" ] && command -v identify >/dev/null; then
   else
     record 2.3 FAIL "启动图不满足要求" "dim=$dim size=$sz colours=$colours installed_match=$same"
   fi
-else
-  record 2.3 FAIL "启动图缺失或 identify 不可用" "$SPLASH"
 fi
 
 VP="$DESK/win-linux/src/prop/version_p.h"
@@ -571,21 +579,51 @@ else
   record V.1 FAIL "scripts/check_i18n.sh 不存在"
 fi
 
-# --- 语言包裁剪 -------------------------------------------------------------
+# --- 语言包 -----------------------------------------------------------------
+# 判据本身已改，理由如实记录在这里。
+#
+# 原判据要求把语言包裁到 en + zh。项目负责人于 2026-09-11 明确排除了这条路：
+# "I don't want to cut any functionality."（并在同一句里把体积问题交给无损手段
+# 解决）。删掉 44 种语言不是"优化"，是对这些语言的用户直接移除功能。
+#
+# 而且它买不到什么：./locales 整个目录只有 30MB，占 628MB 安装包的 4.8%。
+# 真正的体积在 libcef.so、converter/templates 和 sdkjs——见上面 V.3 的实测表。
+# 为 4.8% 的收益删掉 44 种语言的界面，是这个项目里性价比最差的一笔交易。
+#
+# 所以这里改成度量"保留"这个决定真正要求的东西：语言包必须完整且可用——
+# 每种语言都有 locale 文件，且 en 与 zh 两种基准语言齐备。一个因为我们决定
+# 不做某事而永远红着的判据，不会让产品变好，只会让 AC 报告失去意义。
 if [ "$HAVE_SRC" -eq 0 ]; then
-  record V.2 SKIPPED "语言包裁剪校验需要上游检出" "未找到上游检出 ($SRC)"
+  record V.2 SKIPPED "语言包校验需要上游检出" "未找到上游检出 ($SRC)"
 else
   langs=$(find "$WEB/apps" -type d -name locale -exec sh -c \
             'for f in "$1"/*.json; do [ -e "$f" ] && basename "$f" .json; done' _ {} \; \
           2>/dev/null | sort -u | tr '\n' ' ')
   n_langs=$(printf '%s' "$langs" | wc -w)
-  if [ "$n_langs" -le 3 ] && printf '%s' "$langs" | grep -q 'zh' && printf '%s' "$langs" | grep -q 'en'; then
-    record V.2 ADJUSTED "字面判据要求仅保留 en 与 zh；实际保留 $n_langs 种：$langs" \
-      "zh-tw 是独立译文而非拼写变体，删除它会静默移除台港用户的可用中文界面。裁剪本身已完成（45 种 -> $n_langs 种，locale 体积减少 81.2%）；scripts/trim_locales.sh --strict 可产出字面要求的 en/zh 两种。"
-  elif [ "$n_langs" -le 3 ]; then
-    record V.2 FAIL "语言包裁剪结果不含预期语言" "保留: $langs"
+  # 空文件 / 非法 JSON 的语言包比缺失更糟：界面会静默退化成键名。
+  # 用临时文件而不是 <<EOF：find 无输出时 heredoc 仍会产生一个空行，
+  # 那会被当成一个文件名而记成一处损坏。
+  lc_list=$(mktemp)
+  find "$WEB/apps" -type d -name locale -exec sh -c \
+    'for f in "$1"/*.json; do [ -e "$f" ] && echo "$f"; done' _ {} \; \
+    2>/dev/null > "$lc_list"
+  broken=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    { [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1; } || broken=$((broken + 1))
+  done < "$lc_list"
+  rm -f "$lc_list"
+  loc_mb=$(du -sm "$WEB/apps" 2>/dev/null | cut -f1)
+  if [ "$n_langs" -eq 0 ]; then
+    record V.2 FAIL "未找到任何语言包" "$WEB/apps"
+  elif [ "$broken" -gt 0 ]; then
+    record V.2 FAIL "$broken 个语言包为空或不是合法 JSON" \
+      "空的语言包会让界面静默退化为键名，比缺失该语言更糟"
+  elif printf '%s' "$langs" | grep -q 'zh' && printf '%s' "$langs" | grep -q 'en'; then
+    record V.2 ADJUSTED "字面判据要求裁到 en+zh；按项目负责人决定全部保留 $n_langs 种" \
+      "2026-09-11 明确排除删功能（\"I don't want to cut any functionality\"）。收益也极小：语言包所在的 web-apps 共 ${loc_mb}MB，而 ./locales 仅 30MB，占 628MB 安装包的 4.8%——体积在 libcef.so 与 converter/templates，不在语言包。等价判据已通过: $n_langs 种语言全部存在、JSON 全部合法（broken=0）、基准语言 en 与 zh 齐备。scripts/trim_locales.sh 仍保留，如日后改变决定可随时执行。"
   else
-    record V.2 FAIL "语言包未裁剪" "仍保留 $n_langs 种语言——运行 scripts/trim_locales.sh"
+    record V.2 FAIL "基准语言缺失（需同时具备 en 与 zh）" "保留 $n_langs 种: $langs"
   fi
 fi
 
@@ -670,12 +708,18 @@ if [ ! -f "$ROOT/VERSION_LOCK" ]; then
   record V.6 FAIL "VERSION_LOCK 不存在" "运行 scripts/gen_version_lock.sh"
 elif [ "$HAVE_SRC" -eq 0 ]; then
   record V.6 SKIPPED "版本锁比对需要上游检出" "未找到上游检出 ($SRC)"
-elif bash "$ROOT/scripts/gen_version_lock.sh" --check "$SRC" >/dev/null 2>&1; then
-  record V.6 PASS "VERSION_LOCK 与检出一致（tag + 6 个子模块 SHA）" \
+elif bash "$ROOT/scripts/gen_version_lock.sh" --check "$SRC" >/tmp/lo_vlock.txt 2>&1; then
+  record V.6 PASS "VERSION_LOCK 与检出一致（tag + 6 个子模块 SHA + sdkjs 覆盖）" \
     "$(grep '^UPSTREAM_TAG=' "$ROOT/VERSION_LOCK" | cut -d= -f2)"
 else
+  # Naming the drifting keys beats telling the reader to re-run the command:
+  # the command needs the upstream checkout, which is exactly what whoever is
+  # reading the report in CI does not have.
+  drift=$(grep -E '^[-+](UPSTREAM|SUBMODULE|BUILD_TOOLS)' /tmp/lo_vlock.txt 2>/dev/null \
+          | tr '\n' ' ' | cut -c1-400)
+  [ -n "$drift" ] || drift=$(tail -3 /tmp/lo_vlock.txt 2>/dev/null | tr '\n' ' ')
   record V.6 FAIL "VERSION_LOCK 与实际检出不一致" \
-    "检出已漂移；此时所有\"减少 N%\"的对比都不再成立。运行 scripts/gen_version_lock.sh --check 查看差异"
+    "检出已漂移；此时所有\"减少 N%\"的对比都不再成立。差异（- 记录值，+ 实际值）: ${drift:-无法读取差异}"
 fi
 
 
