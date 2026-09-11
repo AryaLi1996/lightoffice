@@ -21,6 +21,25 @@ TOOLS=https://github.com/ONLYOFFICE/build_tools.git
 # unpinned depot_tools was. Track the branch matching the locked upstream tag.
 TOOLS_REF="${LIGHTOFFICE_BUILD_TOOLS_REF:-release/v9.4.0}"
 
+# The umbrella repo needs pinning for exactly the same reason, and until now it
+# had none: the clone below took --depth 1 with no --branch, which is the tip of
+# the default branch. So every build used whatever master happened to be that
+# day, while VERSION_LOCK claimed v9.4.0 and everything downstream -- every
+# "reduced by N%" baseline, every measurement -- was quoted against a pin that
+# was not being held. Confirmed against the live remote on 2026-09-11:
+#
+#   6a0bea2d0d127c658f57c41c1de4a5ce49e84fb0  refs/heads/master   (what we built)
+#   7b9cd379f428ce23c7ef9c93cbb93f1e3c75f613  refs/tags/v9.4.0    (what we claimed)
+#
+# AC V.6 had been reporting this the whole time; its message was too vague to
+# read, and a separate comparison bug made it fail for a bogus reason as well,
+# so the real signal was lost in the noise.
+#
+# Read the tag from VERSION_LOCK rather than repeating it here: one source of
+# truth, and gen_version_lock.sh --check compares against that same file.
+UPSTREAM_REF="${LIGHTOFFICE_UPSTREAM_REF:-$(sed -n 's/^UPSTREAM_TAG=//p' "$ROOT/VERSION_LOCK" 2>/dev/null | head -1)}"
+UPSTREAM_REF="${UPSTREAM_REF:-v9.4.0}"
+
 retry() {
   local n=0 max=4 delay=2
   until "$@"; do
@@ -39,7 +58,14 @@ else
   mkdir -p "$SRC"
   # Shallow, with shallow submodules: the full history of core/web-apps is
   # several GB and nothing in this project needs it.
-  retry git clone --recursive --depth 1 --shallow-submodules "$UPSTREAM" "$SRC"
+  #
+  # --branch takes a tag as happily as a branch, and with it `git describe
+  # --tags` resolves (the tag ref comes down with the clone). Without it the
+  # shallow clone carries no tags at all, which is the other half of what V.6
+  # reported: UPSTREAM_TAG=UNTAGGED.
+  echo "  pinned to $UPSTREAM_REF"
+  retry git clone --recursive --depth 1 --shallow-submodules \
+    --branch "$UPSTREAM_REF" "$UPSTREAM" "$SRC"
 fi
 
 if [ -d "$BUILD_TOOLS/.git" ]; then
