@@ -571,17 +571,33 @@ jobs:
           retention-days: 30
 
   build-macos:
-    name: Build macOS
-    # macos-13 is being retired and nothing is assigned to it any more. In run
-    # 34380149207 this job sat QUEUED for over seven hours while the other two
-    # finished -- worse than a failure, because the RUN never reaches a
-    # conclusion, so release.yml's `gh run list --workflow build.yml --status
-    # success` can never find a run to publish from, and a queue slot is held
-    # the whole time.
+    name: Build macOS (${{ matrix.arch }})
+    # BOTH macOS architectures are built here, on the SAME arm64 runner, with
+    # the Intel one cross-compiled. That is deliberate.
     #
-    # Still a placeholder that only echoes, so it needs no pinned image.
-    # macos-latest is whatever GitHub currently provides; pin it again when a
-    # real Xcode build lands here and cares which SDK it gets.
+    # The obvious alternative is an Intel runner, and it is a trap this repo has
+    # already sprung once: macos-13 is being retired and nothing is assigned to
+    # it any more, and in run 34380149207 this job sat QUEUED for over seven
+    # hours while the other two finished. That is worse than a failure, because
+    # the RUN never reaches a conclusion, so release.yml's
+    # `gh run list --workflow build.yml --status success` can never find a run
+    # to publish from, and a queue slot is held the whole time. A label that no
+    # runner answers does not fail fast -- it hangs.
+    #
+    # Cross-compiling costs one real complication (an x86_64 Qt has to come from
+    # Rosetta Homebrew, see the dependency step) but it runs on a runner that
+    # definitely exists and fails in minutes when it fails.
+    #
+    # fail-fast is off: these two architectures fail independently and the
+    # verdict on one is not the verdict on the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            brew_prefix: /opt/homebrew
+          - arch: x86_64
+            brew_prefix: /usr/local
     runs-on: macos-latest
     timeout-minutes: 360
     steps:
@@ -601,9 +617,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /Users/runner/Library/Developer/Xcode/DerivedData
-          key: xcode-deriveddata-${{ runner.os }}-${{ hashFiles('**/*.xcodeproj/**', '**/*.xcworkspace/**', 'VERSION_LOCK') }}
+          key: xcode-deriveddata-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('**/*.xcodeproj/**', '**/*.xcworkspace/**', 'VERSION_LOCK') }}
           restore-keys: |
-            xcode-deriveddata-${{ runner.os }}-
+            xcode-deriveddata-${{ runner.os }}-${{ matrix.arch }}-
 
       # Same as the Windows job above: a placeholder that reported success while
       # producing nothing. See that comment for why this now speaks up.
@@ -670,7 +686,10 @@ jobs:
       # ad-hoc signing yields something a fleet Mac will run, and whether the
       # .dmg step works once Ascensio's hardcoded Developer ID is out of the
       # picture. If either answers no, the core build would have been wasted.
+      # Runner-level facts, identical for both matrix legs. Running it twice
+      # proves nothing new and costs a minute.
       - name: Prove the macOS signing and packaging path
+        if: matrix.arch == 'arm64'
         continue-on-error: true
         shell: bash
         run: |
@@ -696,11 +715,39 @@ jobs:
       # and `brew qt: not installed`), so install it. qt@5 rather than qt@6:
       # desktop-apps at the pinned revision builds against Qt 5, the same as the
       # Linux job's qtbase5-dev.
-      - name: Install macOS build dependencies
+      # Qt must match the TARGET architecture, not the runner's. The default
+      # Homebrew on an arm64 runner is arm64-only, so the Intel build needs an
+      # x86_64 Qt, and the only way to get one here is the x86_64 Homebrew that
+      # installs under /usr/local and runs through Rosetta.
+      #
+      # scripts/build_macos.sh checks Qt's architecture with lipo before it
+      # builds anything, so a wrong or missing Qt is named in the preflight
+      # rather than surfacing as every Qt symbol undefined at the link -- which
+      # is how the equivalent ICU mismatch presented in run 34595493731, 18
+      # minutes in and looking like a missing dependency rather than a wrong one.
+      - name: Install macOS build dependencies (${{ matrix.arch }})
         shell: bash
         run: |
-          brew install qt@5 || brew install qt5 || true
-          echo "qt prefix: $(brew --prefix qt@5 2>/dev/null || echo 'not installed')"
+          if [ "${{ matrix.arch }}" = "x86_64" ]; then
+            if ! /usr/bin/pgrep -q oahd && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
+              softwareupdate --install-rosetta --agree-to-license || true
+            fi
+            if [ ! -x ${{ matrix.brew_prefix }}/bin/brew ]; then
+              echo "installing x86_64 Homebrew under ${{ matrix.brew_prefix }} (Rosetta)"
+              arch -x86_64 /bin/bash -c \
+                "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
+                </dev/null || true
+            fi
+            arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew install qt@5 || true
+            prefix="$(arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew --prefix qt@5 2>/dev/null || true)"
+          else
+            brew install qt@5 || brew install qt5 || true
+            prefix="$(brew --prefix qt@5 2>/dev/null || true)"
+          fi
+          echo "qt prefix: ${prefix:-not installed}"
+          # build_macos.sh prefers this over its own brew lookup, which would
+          # find the arm64 Qt in both cases.
+          [ -n "$prefix" ] && echo "LIGHTOFFICE_QT_PREFIX=$prefix" >> "$GITHUB_ENV"
 
       # CMake 4 removed compatibility with pre-3.5 CMakeLists, and the runner
       # ships 4.4.3. Run 34575866221 got 22 minutes into make.py and died in
@@ -756,19 +803,19 @@ jobs:
       # Preflight first, as its own step. The build below takes hours, and a
       # missing prerequisite that surfaces two hours in costs a whole runner for
       # an answer that was available in ten seconds.
-      - name: Preflight the macOS build
+      - name: Preflight the macOS build (${{ matrix.arch }})
         shell: bash
         env:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
-        run: scripts/build_macos.sh --check-only --arch arm64
+        run: scripts/build_macos.sh --check-only --arch ${{ matrix.arch }}
 
-      - name: Build macOS (arm64), ad-hoc signed
+      - name: Build macOS (${{ matrix.arch }}), ad-hoc signed
         id: macbuild
         continue-on-error: true
         shell: bash
         env:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
-        run: scripts/build_macos.sh --arch arm64
+        run: scripts/build_macos.sh --arch ${{ matrix.arch }}
 
       # This is a first attempt at a build nobody has run before. Say plainly
       # whether it produced an installer instead of letting a green checkmark
@@ -800,6 +847,6 @@ jobs:
         if: hashFiles('artifacts/WPS-Lite-*') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: macos-artifacts
+          name: macos-artifacts-${{ matrix.arch }}
           path: artifacts/
           retention-days: 30

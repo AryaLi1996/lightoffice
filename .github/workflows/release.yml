@@ -83,7 +83,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: '*-artifacts'
+          # '*-artifacts' stopped matching when the macOS job became a matrix:
+          # its artifacts are macos-artifacts-arm64 and macos-artifacts-x86_64.
+          # The old pattern would have quietly published a release with no Mac
+          # build in it at all -- download-artifact does not error on a pattern
+          # that matches nothing.
+          pattern: '*-artifacts*'
           merge-multiple: true
           run-id: ${{ steps.src.outputs.run_id }}
           github-token: ${{ github.token }}
@@ -94,7 +99,12 @@ jobs:
           shopt -s nullglob
           cd dist
           missing=0
-          for f in WPS-Lite-linux-amd64.deb WPS-Lite-win-x64.exe WPS-Lite-mac-universal.dmg; do
+          # WPS-Lite-mac-universal.dmg was never produced by anything: the macOS
+          # build emits one .dmg per architecture, named by scripts/build_macos.sh.
+          # A required file that no step creates makes every release "incomplete"
+          # regardless of what actually built.
+          for f in WPS-Lite-linux-amd64.deb WPS-Lite-win-x64.exe \
+                   WPS-Lite-macos-arm64.dmg WPS-Lite-macos-x86_64.dmg; do
             if [ -f "$f" ]; then
               size=$(stat -c%s "$f")
               mb=$((size / 1024 / 1024))
