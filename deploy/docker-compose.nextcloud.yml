@@ -140,10 +140,16 @@ services:
       intranet:
         ipv4_address: 172.28.7.40
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "--no-check-certificate", "https://localhost/status.php"]
-      interval: 15s
+      # Plain HTTP against nginx's own /healthz on the loopback literal. See
+      # the long note on that server block in nginx/lightoffice.conf for why
+      # the previous https://localhost/status.php check could never pass.
+      # -O /dev/null rather than --spider: both exist in BusyBox wget, but -O
+      # is the form that behaves identically in GNU wget if the base image
+      # ever changes.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
       timeout: 5s
-      retries: 20
+      retries: 12
 
 volumes:
   db_data:
