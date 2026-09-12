@@ -122,7 +122,11 @@ if [ -x "$VSWHERE" ]; then
   vs_root="$("$VSWHERE" -latest -property installationPath 2>/dev/null | tr -d '\r')"
   ok "Visual Studio at ${vs_root:-unknown}"
   if [ -n "$vs_root" ] && [ -d "$vs_root/VC/Tools/MSVC" ]; then
-    toolsets="$(ls "$vs_root/VC/Tools/MSVC" 2>/dev/null | tr '\n' ' ')"
+    # `|| true` is not redundant despite the -d guard above: ls exits non-zero
+    # on an unreadable directory too, and with pipefail + set -e that aborts
+    # the preflight silently. The identical pattern in build_macos.sh cost run
+    # 34663626582 its whole arm64 leg in under a second, with no message.
+    toolsets="$(ls "$vs_root/VC/Tools/MSVC" 2>/dev/null | tr '\n' ' ' || true)"
     ok "MSVC toolsets installed: ${toolsets:-none}"
     # 14.2x is the v142 (VS 2019) toolset boost.py's "2019" branch selects.
     case " $toolsets " in
