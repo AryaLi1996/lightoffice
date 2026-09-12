@@ -603,6 +603,20 @@ jobs:
             echo "qt=missing" >> "$GITHUB_OUTPUT"
           fi
 
+          # grunt drives the JS stage. Upstream installs it in
+          # build_tools/tools/linux/deps.py, which only runs on Linux; see the
+          # same block in the macOS deps step and the long note in
+          # docker/build-linux.Dockerfile. Windows has not reached the JS stage
+          # yet (it is still dying earlier, in V8), but it would hit exactly the
+          # wall macOS hit in run 34669576598, so install it now rather than
+          # spend another 30-minute run finding that out.
+          npm install -g grunt-cli >/dev/null 2>&1 || npm install -g grunt-cli
+          if command -v grunt >/dev/null 2>&1; then
+            echo "grunt: $(command -v grunt)"
+          else
+            echo "::warning::windows: grunt-cli did not install"
+          fi
+
       # THE COMPILER IS NOT ON PATH UNTIL vcvarsall RUNS. Run 34666010157 hit
       # this 4m46s in, after cloning all of Boost:
       #
@@ -712,6 +726,41 @@ jobs:
           else
             echo "::warning::windows: no cl.exe on the exported PATH —"
             echo "  the preflight will say so before the build burns time on it"
+          fi
+
+          # V8 8.9 (core/Common/3dParty/v8_89) carries a 2021-era Chromium
+          # build/vs_toolchain.py whose GetVisualStudioVersion() knows only
+          # 2017 and 2019. On this runner it raises, 30 minutes in:
+          #
+          #   Exception: No supported Visual Studio can be found.
+          #     Supported versions are: 16.0 (2019), 15.0 (2017).
+          #   ERROR at //build/config/win/visual_studio_version.gni:27:7
+          #   Error (gn): 1
+          #
+          # That script's own escape hatch is the vs<year>_install variable: it
+          # probes $vs2019_install before the hardcoded install paths, and
+          # DetectVisualStudioPath() then returns whatever that names. Pointing
+          # it at the 2022 installation makes the 2019 branch resolve to a real
+          # toolchain. This is not pretending 2022 is 2019 for the compile --
+          # vcvarsall above already selected the v142 toolset, which is what
+          # both V8 and boost.py expect; it only tells a script that predates
+          # 2022 where that toolset lives.
+          #
+          # DEPOT_TOOLS_WIN_TOOLCHAIN=0 is what puts it on this path at all:
+          # with it unset the script assumes Google's internal toolchain
+          # package. It is already 0 here, which is why the exception surfaced
+          # rather than a missing-package error; set it explicitly so the
+          # behaviour does not depend on what set it.
+          if [ -n "${vs:-}" ]; then
+            {
+              echo "vs2019_install=$vs"
+              echo "GYP_MSVS_VERSION=2019"
+              echo "GYP_MSVS_OVERRIDE_PATH=$vs"
+              echo "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+            } >> "$GITHUB_ENV"
+            echo "V8: pointed vs2019_install at $vs"
+          else
+            echo "::warning::windows: no VS installation path — V8 will not configure"
           fi
 
       - name: Bootstrap the upstream tree
@@ -976,6 +1025,23 @@ jobs:
             echo "::warning::macos ${{ matrix.arch }}: brew did not provide qt@5"
             echo "qt=missing" >> "$GITHUB_OUTPUT"
           fi
+
+          # grunt drives the JS stage (sdkjs and web-apps). Upstream installs it
+          # in build_tools/tools/linux/deps.py, which only runs on Linux -- and
+          # even there fetch_prebuilts.sh skips deps.py, which is why
+          # docker/build-linux.Dockerfile installs grunt-cli explicitly and says
+          # so at length. macOS goes through neither path, so nothing provides
+          # it: run 34669576598 compiled the whole native core in 35 minutes and
+          # then died on `/bin/sh: grunt: command not found` (Error (grunt): 127).
+          npm install -g grunt-cli >/dev/null 2>&1 || npm install -g grunt-cli
+          # Presence, not `grunt --version`: that exits non-zero with no local
+          # Gruntfile, the same trap the Dockerfile documents.
+          if command -v grunt >/dev/null 2>&1; then
+            echo "grunt: $(command -v grunt)"
+          else
+            echo "::warning::macos ${{ matrix.arch }}: grunt-cli did not install"
+          fi
+          echo "node: $(node --version 2>&1)   java: $(java -version 2>&1 | head -1)"
 
       # CMake 4 removed compatibility with pre-3.5 CMakeLists, and the runner
       # ships 4.4.3. Run 34575866221 got 22 minutes into make.py and died in

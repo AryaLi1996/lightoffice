@@ -143,6 +143,20 @@ if command -v cmake >/dev/null; then
 else
   bad "cmake not found"; fatal=1
 fi
+# grunt drives the JS stage (sdkjs, web-apps) via build_tools/scripts/build_js.py,
+# which shells out to a bare `grunt`. Upstream installs grunt-cli in
+# tools/linux/deps.py -- Linux only. Without it the native core compiles for 35
+# minutes and then dies on "/bin/sh: grunt: command not found" (Error (grunt):
+# 127), which is what run 34669576598 spent its arm64 leg discovering.
+# Checked by presence: `grunt --version` exits non-zero with no local Gruntfile.
+if command -v grunt >/dev/null; then
+  ok "grunt ($(command -v grunt))"
+else
+  bad "grunt not found — the JS stage needs it: npm install -g grunt-cli"; fatal=1
+fi
+command -v node >/dev/null && ok "node ($(node --version 2>&1))" \
+  || { bad "node not found — the JS stage needs it"; fatal=1; }
+
 command -v codesign >/dev/null && ok "codesign" || { bad "codesign not found"; fatal=1; }
 command -v hdiutil  >/dev/null && ok "hdiutil"  || { bad "hdiutil not found";  fatal=1; }
 command -v npx      >/dev/null && ok "npx (for appdmg)" || warn "npx not found — the .dmg step will be skipped"

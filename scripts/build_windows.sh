@@ -159,6 +159,32 @@ else
   fatal=1
 fi
 
+# grunt drives the JS stage (sdkjs, web-apps) via build_tools/scripts/build_js.py,
+# which shells out to a bare `grunt`. Upstream installs grunt-cli in
+# tools/linux/deps.py -- Linux only -- so nothing provides it here. macOS hit
+# exactly this in run 34669576598: 35 minutes of native compile, then
+# "/bin/sh: grunt: command not found" (Error (grunt): 127). Windows has not got
+# that far yet, so check for it now rather than learn the same thing later.
+# Checked by presence: `grunt --version` exits non-zero with no local Gruntfile.
+if command -v grunt >/dev/null 2>&1; then
+  ok "grunt ($(command -v grunt))"
+else
+  bad "grunt not found — the JS stage needs it: npm install -g grunt-cli"; fatal=1
+fi
+
+# V8 8.9 ships a 2021-era Chromium vs_toolchain.py that accepts only VS 2017 and
+# 2019 and raises "No supported Visual Studio can be found" on anything newer.
+# Its own escape hatch is vs2019_install, which the workflow points at the 2022
+# installation. Without it the build reaches V8 about 30 minutes in and stops.
+if [ -n "${vs2019_install:-}" ] && [ -d "${vs2019_install:-}" ]; then
+  ok "vs2019_install is set for V8 ($vs2019_install)"
+elif [ -n "${vs2019_install:-}" ]; then
+  bad "vs2019_install is set but does not exist: $vs2019_install"; fatal=1
+else
+  warn "vs2019_install is unset — V8's vs_toolchain.py rejects VS 2022 and the"
+  warn "  build will stop in V8. In CI the MSVC environment step sets it."
+fi
+
 # 3. Qt. Same rule as macOS: upstream derives the Qt VERSION from the deploy
 #    path (base.py takes QT_DEPLOY.split("/")[-3] and keeps digits and dots),
 #    so the directory must look like <...>/Qt-<version>/<compiler>/<...>.
