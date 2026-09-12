@@ -572,21 +572,26 @@ jobs:
 
   build-macos:
     name: Build macOS (${{ matrix.arch }})
-    # BOTH macOS architectures are built here, on the SAME arm64 runner, with
-    # the Intel one cross-compiled. That is deliberate.
+    # Each architecture builds on a runner of its OWN architecture. No cross
+    # compilation, which removes the problem that killed the previous approach:
+    # Homebrew now refuses to install its x86_64 build on Apple Silicon
+    # ("Homebrew on macOS is only supported on Apple Silicon processors!",
+    # run 34606860124), so an Intel Qt could not be obtained there at all. On a
+    # native Intel runner `brew install qt@5` is an ordinary install.
     #
-    # The obvious alternative is an Intel runner, and it is a trap this repo has
-    # already sprung once: macos-13 is being retired and nothing is assigned to
-    # it any more, and in run 34380149207 this job sat QUEUED for over seven
-    # hours while the other two finished. That is worse than a failure, because
+    # THE RISK THIS TAKES ON, stated plainly because this repo has been bitten
+    # by it: a runs-on label no runner answers does NOT fail fast, it QUEUES.
+    # macos-13 did exactly that in run 34380149207 -- this job sat queued over
+    # seven hours while the other two finished. That is worse than a failure:
     # the RUN never reaches a conclusion, so release.yml's
     # `gh run list --workflow build.yml --status success` can never find a run
-    # to publish from, and a queue slot is held the whole time. A label that no
-    # runner answers does not fail fast -- it hangs.
+    # to publish from. Job-level timeout-minutes does NOT help, because it
+    # starts counting when the job starts RUNNING, not while it waits.
     #
-    # Cross-compiling costs one real complication (an x86_64 Qt has to come from
-    # Rosetta Homebrew, see the dependency step) but it runs on a runner that
-    # definitely exists and fails in minutes when it fails.
+    # So if the x86_64 leg sits queued while the arm64 leg makes progress, that
+    # is this failure mode, and the response is to cancel the run rather than
+    # wait it out. macos-15-intel is the current Intel label; macos-13 is the
+    # retired one this comment used to warn about.
     #
     # fail-fast is off: these two architectures fail independently and the
     # verdict on one is not the verdict on the other.
@@ -595,10 +600,10 @@ jobs:
       matrix:
         include:
           - arch: arm64
-            brew_prefix: /opt/homebrew
+            runner: macos-latest
           - arch: x86_64
-            brew_prefix: /usr/local
-    runs-on: macos-latest
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
@@ -711,65 +716,42 @@ jobs:
       # fastlane lane is bypassed, why appdmg.json's code-sign block is dropped
       # -- is documented in scripts/build_macos.sh rather than repeated here.
       #
-      # Qt: the runner has none (run 34560326333 reported `qmake: not installed`
-      # and `brew qt: not installed`), so install it. qt@5 rather than qt@6:
-      # desktop-apps at the pinned revision builds against Qt 5, the same as the
-      # Linux job's qtbase5-dev.
-      # Qt must match the TARGET architecture, not the runner's. The default
-      # Homebrew on an arm64 runner is arm64-only, so the Intel build needs an
-      # x86_64 Qt, and the only way to get one here is the x86_64 Homebrew that
-      # installs under /usr/local and runs through Rosetta.
+      # Qt: the runners ship none (run 34560326333 reported `qmake: not
+      # installed` and `brew qt: not installed`), so install it.
       #
-      # scripts/build_macos.sh checks Qt's architecture with lipo before it
-      # builds anything, so a wrong or missing Qt is named in the preflight
-      # rather than surfacing as every Qt symbol undefined at the link -- which
-      # is how the equivalent ICU mismatch presented in run 34595493731, 18
-      # minutes in and looking like a missing dependency rather than a wrong one.
+      # build_macos.sh still checks Qt's architecture with lipo before building.
+      # Native runners should make that check trivially true, which is the
+      # point: it costs a second and it caught nothing only because the arch is
+      # now right by construction. A wrong Qt would otherwise surface as every
+      # Qt symbol undefined at the link -- how the ICU mismatch presented in run
+      # 34595493731, 18 minutes in, looking like a missing dependency rather
+      # than a wrong one.
+      # Both legs now run natively, so this is the same ordinary Homebrew
+      # install on each. The Rosetta dance that used to be here is gone with
+      # the cross build: Homebrew refuses to install its x86_64 build on Apple
+      # Silicon, which is what forced the move to a native Intel runner.
+      #
+      # qt@5 rather than qt@6: desktop-apps at the pinned revision builds
+      # against Qt 5, the same as the Linux job's qtbase5-dev.
       - name: Install macOS build dependencies (${{ matrix.arch }})
         id: deps
         shell: bash
         run: |
-          prefix=""
-          if [ "${{ matrix.arch }}" = "x86_64" ]; then
-            # Homebrew NO LONGER SUPPORTS x86_64 ON APPLE SILICON. Run
-            # 34606860124 settled it in one second:
-            #
-            #   Homebrew on macOS is only supported on Apple Silicon processors!
-            #   arch: /usr/local/bin/brew isn't executable
-            #
-            # Rosetta itself is fine; Homebrew's installer refuses. So the
-            # Intel Qt cannot come from here, and cross-compiling Intel on this
-            # runner is blocked on Qt specifically -- everything else in the
-            # toolchain cross-compiles happily.
-            #
-            # Detect it and say so rather than failing the run: a red leg on
-            # every build teaches people to ignore red legs.
-            if [ ! -x ${{ matrix.brew_prefix }}/bin/brew ]; then
-              arch -x86_64 /bin/bash -c \
-                "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-                </dev/null >/tmp/brew-x86.log 2>&1 || true
-            fi
-            if [ -x ${{ matrix.brew_prefix }}/bin/brew ]; then
-              arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew install qt@5 || true
-              prefix="$(arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew --prefix qt@5 2>/dev/null || true)"
-            else
-              echo "::warning::no x86_64 Homebrew: $(grep -m1 'only supported' /tmp/brew-x86.log 2>/dev/null || echo 'installer refused')"
-            fi
-          else
-            brew install qt@5 || brew install qt5 || true
-            prefix="$(brew --prefix qt@5 2>/dev/null || true)"
-          fi
+          brew install qt@5 || brew install qt5 || true
+          prefix="$(brew --prefix qt@5 2>/dev/null || true)"
+          echo "runner arch: $(uname -m)   target: ${{ matrix.arch }}"
           echo "qt prefix: ${prefix:-NOT AVAILABLE}"
           # `[ -n "$x" ] && cmd` as the LAST line of a `bash -e` step exits 1
           # when the test is false, failing the step for a condition that is
-          # not an error. That is what turned this into a red run rather than a
-          # reported finding. An if-block has no such exit status.
+          # not an error -- which is how an empty prefix became a red run in
+          # 34606860124 instead of a reported finding. An if-block has no such
+          # exit status.
           if [ -n "$prefix" ]; then
-            # build_macos.sh prefers this over its own brew lookup, which would
-            # find the arm64 Qt in both cases.
+            # build_macos.sh prefers this over its own brew lookup.
             echo "LIGHTOFFICE_QT_PREFIX=$prefix" >> "$GITHUB_ENV"
             echo "qt=ok" >> "$GITHUB_OUTPUT"
           else
+            echo "::warning::macos ${{ matrix.arch }}: brew did not provide qt@5"
             echo "qt=missing" >> "$GITHUB_OUTPUT"
           fi
 
@@ -866,13 +848,10 @@ jobs:
             elif [ "${{ steps.deps.outputs.qt }}" != "ok" ]; then
               echo "**No ${{ matrix.arch }} Qt available, so the build was skipped.**"
               echo
-              echo "Homebrew refuses to install its x86_64 build on Apple Silicon"
-              echo "(\`Homebrew on macOS is only supported on Apple Silicon processors!\`),"
-              echo "so an Intel Qt cannot come from this runner. Rosetta is not the"
-              echo "problem -- everything else in the toolchain cross-compiles."
-              echo
-              echo "Getting an Intel build needs one of: an Intel runner, a Qt built"
-              echo "from source for x86_64, or dropping the Intel target."
+              echo "\`brew install qt@5\` did not yield a Qt on this runner"
+              echo "(\`${{ matrix.runner }}\`, $(uname -m)). Without Qt there is"
+              echo "nothing to build against, so the build steps were skipped"
+              echo "rather than run and fail later."
               echo "::warning::macos ${{ matrix.arch }}: skipped, no ${{ matrix.arch }} Qt on this runner"
             else
               echo "No installer produced. The build step is \`continue-on-error\`"
