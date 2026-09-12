@@ -726,28 +726,52 @@ jobs:
       # is how the equivalent ICU mismatch presented in run 34595493731, 18
       # minutes in and looking like a missing dependency rather than a wrong one.
       - name: Install macOS build dependencies (${{ matrix.arch }})
+        id: deps
         shell: bash
         run: |
+          prefix=""
           if [ "${{ matrix.arch }}" = "x86_64" ]; then
-            if ! /usr/bin/pgrep -q oahd && ! arch -x86_64 /usr/bin/true 2>/dev/null; then
-              softwareupdate --install-rosetta --agree-to-license || true
-            fi
+            # Homebrew NO LONGER SUPPORTS x86_64 ON APPLE SILICON. Run
+            # 34606860124 settled it in one second:
+            #
+            #   Homebrew on macOS is only supported on Apple Silicon processors!
+            #   arch: /usr/local/bin/brew isn't executable
+            #
+            # Rosetta itself is fine; Homebrew's installer refuses. So the
+            # Intel Qt cannot come from here, and cross-compiling Intel on this
+            # runner is blocked on Qt specifically -- everything else in the
+            # toolchain cross-compiles happily.
+            #
+            # Detect it and say so rather than failing the run: a red leg on
+            # every build teaches people to ignore red legs.
             if [ ! -x ${{ matrix.brew_prefix }}/bin/brew ]; then
-              echo "installing x86_64 Homebrew under ${{ matrix.brew_prefix }} (Rosetta)"
               arch -x86_64 /bin/bash -c \
                 "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" \
-                </dev/null || true
+                </dev/null >/tmp/brew-x86.log 2>&1 || true
             fi
-            arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew install qt@5 || true
-            prefix="$(arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew --prefix qt@5 2>/dev/null || true)"
+            if [ -x ${{ matrix.brew_prefix }}/bin/brew ]; then
+              arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew install qt@5 || true
+              prefix="$(arch -x86_64 ${{ matrix.brew_prefix }}/bin/brew --prefix qt@5 2>/dev/null || true)"
+            else
+              echo "::warning::no x86_64 Homebrew: $(grep -m1 'only supported' /tmp/brew-x86.log 2>/dev/null || echo 'installer refused')"
+            fi
           else
             brew install qt@5 || brew install qt5 || true
             prefix="$(brew --prefix qt@5 2>/dev/null || true)"
           fi
-          echo "qt prefix: ${prefix:-not installed}"
-          # build_macos.sh prefers this over its own brew lookup, which would
-          # find the arm64 Qt in both cases.
-          [ -n "$prefix" ] && echo "LIGHTOFFICE_QT_PREFIX=$prefix" >> "$GITHUB_ENV"
+          echo "qt prefix: ${prefix:-NOT AVAILABLE}"
+          # `[ -n "$x" ] && cmd` as the LAST line of a `bash -e` step exits 1
+          # when the test is false, failing the step for a condition that is
+          # not an error. That is what turned this into a red run rather than a
+          # reported finding. An if-block has no such exit status.
+          if [ -n "$prefix" ]; then
+            # build_macos.sh prefers this over its own brew lookup, which would
+            # find the arm64 Qt in both cases.
+            echo "LIGHTOFFICE_QT_PREFIX=$prefix" >> "$GITHUB_ENV"
+            echo "qt=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "qt=missing" >> "$GITHUB_OUTPUT"
+          fi
 
       # CMake 4 removed compatibility with pre-3.5 CMakeLists, and the runner
       # ships 4.4.3. Run 34575866221 got 22 minutes into make.py and died in
@@ -773,6 +797,7 @@ jobs:
       # fetched over the network without a checksum is an unpinned dependency,
       # which is the trap build_tools/depot_tools already sprang once here.
       - name: Pin CMake to the last 3.x (CMake 4 cannot build vendored x265)
+        if: steps.deps.outputs.qt == 'ok'
         shell: bash
         run: |
           ver=3.31.7
@@ -791,6 +816,7 @@ jobs:
           echo "pinned: $("$bin/cmake" --version | head -1) (was $(cmake --version | head -1))"
 
       - name: Bootstrap the upstream tree
+        if: steps.deps.outputs.qt == 'ok'
         shell: bash
         env:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
@@ -804,12 +830,14 @@ jobs:
       # missing prerequisite that surfaces two hours in costs a whole runner for
       # an answer that was available in ten seconds.
       - name: Preflight the macOS build (${{ matrix.arch }})
+        if: steps.deps.outputs.qt == 'ok'
         shell: bash
         env:
           LIGHTOFFICE_SRC: /opt/lightoffice/src
         run: scripts/build_macos.sh --check-only --arch ${{ matrix.arch }}
 
       - name: Build macOS (${{ matrix.arch }}), ad-hoc signed
+        if: steps.deps.outputs.qt == 'ok'
         id: macbuild
         continue-on-error: true
         shell: bash
@@ -835,11 +863,22 @@ jobs:
               done
               echo
               echo "Ad-hoc signed; no Apple Developer account and no notarization."
+            elif [ "${{ steps.deps.outputs.qt }}" != "ok" ]; then
+              echo "**No ${{ matrix.arch }} Qt available, so the build was skipped.**"
+              echo
+              echo "Homebrew refuses to install its x86_64 build on Apple Silicon"
+              echo "(\`Homebrew on macOS is only supported on Apple Silicon processors!\`),"
+              echo "so an Intel Qt cannot come from this runner. Rosetta is not the"
+              echo "problem -- everything else in the toolchain cross-compiles."
+              echo
+              echo "Getting an Intel build needs one of: an Intel runner, a Qt built"
+              echo "from source for x86_64, or dropping the Intel target."
+              echo "::warning::macos ${{ matrix.arch }}: skipped, no ${{ matrix.arch }} Qt on this runner"
             else
-              echo "No installer produced. The step above is \`continue-on-error\`"
-              echo "because this is the first run of a build that has never run"
-              echo "before -- read its log for the phase that stopped."
-              echo "::notice::macos: build did not produce an installer yet"
+              echo "No installer produced. The build step is \`continue-on-error\`"
+              echo "because this build is still being brought up -- read its log"
+              echo "for the phase that stopped."
+              echo "::notice::macos ${{ matrix.arch }}: build did not produce an installer yet"
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 

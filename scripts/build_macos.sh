@@ -211,6 +211,20 @@ echo
 echo "Running upstream build (this takes hours) ..."
 cd "$BUILD_TOOLS"
 
+# Boost 1.72 (what boost.py pins) vs Apple clang 21. Run 34601443842 spent
+# 38 minutes reaching this and died compiling libetonyek:
+#
+#   integral_wrapper.hpp:73: error: non-type template argument is not a
+#   constant expression -- integer value -1 is outside the valid range of
+#   values [0, 3] for the enumeration type 'int_float_mixture_enum'
+#
+# The patch script carries the full reasoning. It is idempotent, macOS-only,
+# and refuses to edit if upstream's base.pri layout has moved rather than
+# patching blind.
+phase_begin patch-boost
+"$ROOT/scripts/patch_boost_enum_constexpr.sh" "$SRC"
+phase_end
+
 # --platform is NOT optional here, though it looks it. It defaults to "native",
 # and build_tools/scripts/config.py expands that as:
 #
