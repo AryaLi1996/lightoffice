@@ -513,41 +513,152 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cache vcpkg packages
+      # Was a vcpkg cache. Nothing in this repository or in upstream's Windows
+      # build uses vcpkg -- there is no vcpkg.json, so hashFiles returned empty
+      # and the key never varied. It cached an empty directory and implied a
+      # dependency that does not exist. Cache Qt instead, which this build
+      # really does download (~1.5 GB via aqtinstall) on every run.
+      - name: Cache Qt
         uses: actions/cache@v4
         with:
-          path: C:\vcpkg\installed
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: |
-            vcpkg-${{ runner.os }}-
+          path: C:\Qt
+          key: qt-5.15.2-msvc2019_64-${{ runner.os }}
 
-      # This job produces no installer yet, and until 2026-09-10 it said so
-      # only by echoing a placeholder line — then ran upload-artifact against an
-      # artifacts/ directory that was never created:
+      # STEP ONE OF THE WINDOWS PORT: report what only a real Windows runner
+      # can tell us, before committing to a build that takes hours.
       #
-      #   ##[warning]No files were found with the provided path: artifacts/.
-      #   No artifacts will be uploaded.
+      # The rest was settled by reading the pinned trees directly:
+      #   - desktop-apps has NO make_installer.bat anywhere. scripts/package.sh
+      #     invoked one for months; the real packaging is PowerShell in
+      #     desktop-apps/package (make.ps1 then make_inno.ps1).
+      #   - those scripts take -Sign as an opt-in switch defaulting OFF, so an
+      #     unsigned build needs no certificate, matching the fleet-only
+      #     posture already settled for macOS.
+      #   - build_tools' boost.py knows msvc-14.0 (VS 2015) and msvc-14.2
+      #     (VS 2019) and nothing newer.
       #
-      # and still reported SUCCESS. A green Windows job was indistinguishable
-      # from a Windows build that worked, which is worse than an obviously
-      # missing one. It stays green (an unimplemented port is not a failure)
-      # but now states the gap where a reader will actually see it.
-      - name: Report that no Windows installer is produced yet
+      # So the one open question is the toolchain: which MSVC toolsets this
+      # image actually carries, and whether Qt and Inno Setup are present. On
+      # macOS the equivalent assumption went unchecked and cost 18 minutes and
+      # a confusing link error, so it gets checked first here.
+      - name: Discover what a Windows build needs
+        continue-on-error: true
         shell: bash
         run: |
-          echo "::notice::windows: no installer produced — the native build is not implemented yet"
+          set +e
           {
-            echo "### Windows: no installer produced"
+            echo "### Windows build: runner capabilities"
             echo
-            echo "This job is a placeholder. It does **not** build anything."
+            echo '```'
+            echo "os          : $(cmd //c ver 2>/dev/null | tr -d '\r' | tr -s ' ')"
+            echo "python3     : $(python3 --version 2>&1)"
+            echo "powershell  : $(powershell -NoProfile -Command '$PSVersionTable.PSVersion.ToString()' 2>/dev/null | tr -d '\r')"
+            vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+            if [ -x "$vswhere" ]; then
+              vs="$("$vswhere" -latest -property installationPath 2>/dev/null | tr -d '\r')"
+              echo "VS          : $("$vswhere" -latest -property displayName 2>/dev/null | tr -d '\r')"
+              echo "VS path     : $vs"
+              echo "MSVC sets   : $(ls "$vs/VC/Tools/MSVC" 2>/dev/null | tr '\n' ' ')"
+            else
+              echo "VS          : vswhere MISSING"
+            fi
+            echo "qmake       : $(command -v qmake qmake.exe 2>/dev/null | head -1 || echo 'not installed')"
+            echo "Qt env      : ${Qt5_DIR:-${QT_ROOT_DIR:-unset}}"
+            for c in "/c/Program Files (x86)/Inno Setup 6" "/c/Program Files/Inno Setup 6"; do
+              [ -x "$c/ISCC.exe" ] && echo "Inno Setup  : $c" && inno=1
+            done
+            [ -z "${inno:-}" ] && echo "Inno Setup  : not installed"
+            echo "cmake       : $(cmake --version 2>/dev/null | head -1)"
+            echo '```'
             echo
-            echo "\`scripts/package.sh\` already knows how to package on Windows —"
-            echo "it invokes upstream's \`make_installer.bat\` from"
-            echo "\`desktop-apps/win-linux/package/windows\`. What is missing is the"
-            echo "*build* that must run before it: \`scripts/build_desktop.sh\` drives"
-            echo "\`build_tools/tools/linux\` only and exits 2 on any other host."
+            echo "boost.py at this pin selects msvc-14.0 (vc140, VS 2015) by default and"
+            echo "msvc-14.2 (vc142, VS 2019) only when --vs-version 2019 is passed. It has"
+            echo "no branch for VS 2022 (vc143). If the MSVC set above has no 14.2x entry,"
+            echo "that gap is the first thing the build will hit."
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      # Qt for MSVC is not on the image. aqtinstall is the standard way to get
+      # an official Qt in CI -- the analogue of `brew install qt@5` on macOS.
+      # Qt 5.15.2 msvc2019_64 matches the toolset boost.py's newest branch asks
+      # for. Inno Setup 6 is what make_inno.ps1 wants; it reads $INNOPATH
+      # before falling back to a registry key, so the build script sets that
+      # rather than hoping the key is where upstream expects.
+      - name: Install Windows build dependencies
+        id: deps
+        continue-on-error: true
+        shell: bash
+        run: |
+          pip install --quiet aqtinstall || true
+          python -m aqt install-qt windows desktop 5.15.2 win64_msvc2019_64 \
+            -O /c/Qt >/tmp/aqt.log 2>&1 || tail -20 /tmp/aqt.log
+          qt=/c/Qt/5.15.2/msvc2019_64
+          choco install innosetup --no-progress -y >/tmp/inno.log 2>&1 || tail -20 /tmp/inno.log
+          echo "qt: $qt $([ -x "$qt/bin/qmake.exe" ] && echo present || echo MISSING)"
+          if [ -x "$qt/bin/qmake.exe" ]; then
+            echo "LIGHTOFFICE_QT_PREFIX=$qt" >> "$GITHUB_ENV"
+            echo "qt=ok" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::windows: aqtinstall did not provide Qt 5.15.2 msvc2019_64"
+            echo "qt=missing" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Bootstrap the upstream tree
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: |
+          mkdir -p /c/lightoffice
+          scripts/bootstrap.sh
+          scripts/apply_overlay.sh
+
+      # Preflight separately, as on macOS: a missing prerequisite that surfaces
+      # two hours into a build costs a whole runner for an answer that was
+      # available in seconds.
+      - name: Preflight the Windows build
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: scripts/build_windows.sh --check-only --arch x64
+
+      - name: Build Windows (x64)
+        if: steps.deps.outputs.qt == 'ok'
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+          LIGHTOFFICE_VERSION: 1.0.0.0
+        run: scripts/build_windows.sh --arch x64
+
+      # Say plainly whether an installer appeared. The step this replaces
+      # reported SUCCESS while producing nothing, which is the failure mode
+      # worth not repeating.
+      - name: Report the Windows build outcome
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=(artifacts/WPS-Lite-win-*)
+          {
+            echo "### Windows build"
             echo
-            echo "Needs: a Windows host with the MSVC toolchain and Inno Setup."
+            if [ ${#found[@]} -gt 0 ]; then
+              for f in "${found[@]}"; do
+                printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
+              done
+              echo
+              echo "Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
+              echo "we do not have, so SmartScreen warns on first run."
+            elif [ "${{ steps.deps.outputs.qt }}" != "ok" ]; then
+              echo "**No Qt, so the build was skipped.** See the dependency step."
+              echo "::warning::windows: skipped, no Qt on this runner"
+            else
+              echo "No installer produced. The build step is \`continue-on-error\`"
+              echo "because this build is still being brought up -- read its log"
+              echo "for the phase that stopped."
+              echo "::notice::windows: build did not produce an installer yet"
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # Guarded rather than deleted: when the native build above starts

@@ -4,7 +4,9 @@
 #
 # Cross-platform packaging is host-bound and there is no way around it:
 #   .deb  needs Linux + dpkg-deb
-#   .exe  needs Windows + the Inno Setup / MSVC toolchain (make_installer.bat)
+#   .exe  needs Windows + MSVC and Inno Setup (desktop-apps/package/make.ps1,
+#         driven by scripts/build_windows.sh -- NOT a make_installer.bat, which
+#         does not exist at the pinned revision)
 #   .dmg  needs macOS + Xcode (desktop-apps/macos, an Xcode project driven
 #         by fastlane — NOT a package_mac.py; no such file exists)
 # Running this on Linux therefore produces the .deb and reports the other two as
@@ -140,13 +142,26 @@ else
 fi
 
 # ---------------------------------------------------------------- windows ---
+# This used to run `cmd //c make_installer.bat` in
+# desktop-apps/win-linux/package/windows. That directory does not exist at the
+# pinned revision and there is no .bat file anywhere in desktop-apps -- the
+# same error as the package_mac.py call removed from the macOS path, and for
+# the same reason: a plausible filename that was never checked against the
+# tree. The real packaging is PowerShell in desktop-apps/package (make.ps1 then
+# make_inno.ps1), and it needs the core build to exist first.
+#
+# As on macOS, that makes it a BUILD rather than a packaging step, so it lives
+# in scripts/build_windows.sh and is not invoked from here.
 case "$OS" in
   MINGW*|MSYS*|CYGWIN*)
-    ( cd "$SRC/desktop-apps/win-linux/package/windows" && cmd //c make_installer.bat )
-    built=$((built + 1))
+    echo "  skip .exe — run scripts/build_windows.sh, which builds and packages it"
+    echo "    Windows packages from desktop-apps/package/make.ps1 + make_inno.ps1"
+    echo "    against build_tools/out/win_64, not from this script's pipeline."
+    echo "    Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
+    echo "    we do not have, so SmartScreen warns on first run."
     ;;
   *)
-    echo "  skip .exe — needs a Windows host (make_installer.bat, MSVC + Inno Setup)"
+    echo "  skip .exe — needs a Windows host (scripts/build_windows.sh)"
     ;;
 esac
 
