@@ -603,6 +603,55 @@ jobs:
             echo "qt=missing" >> "$GITHUB_OUTPUT"
           fi
 
+      # THE COMPILER IS NOT ON PATH UNTIL vcvarsall RUNS. Run 34666010157 hit
+      # this 4m46s in, after cloning all of Boost:
+      #
+      #   Building Boost.Build engine
+      #   'cl' is not recognized as an internal or external command
+      #   Failed to build Boost.Build engine.
+      #   Error (bootstrap.bat): 1
+      #
+      # Not the vc143 gap that was expected -- simpler and more basic. MSVC
+      # only reaches PATH after vcvarsall.bat, which is what a "Developer
+      # Command Prompt" does for you and what a plain bash step does not. The
+      # preflight checked that Visual Studio was INSTALLED, which was true and
+      # not the question; it never checked that the compiler was CALLABLE.
+      #
+      # -vcvars_ver=14.2 selects the v142 toolset when it is present, because
+      # that is the newest boost.py has a branch for. Falling back to the
+      # default when it is absent is deliberate: it gets the build moving and
+      # the next failure then tells us whether vc143 really is a problem,
+      # rather than stopping here on a prediction.
+      #
+      # Only PATH/INCLUDE/LIB/LIBPATH are exported. Dumping all of `set` into
+      # GITHUB_ENV drags in multi-line and quoted values that corrupt the file.
+      - name: Set up the MSVC environment
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        run: |
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          vs="$("$vswhere" -latest -property installationPath | tr -d '\r')"
+          vcvars="$vs\\VC\\Auxiliary\\Build\\vcvarsall.bat"
+          echo "vcvarsall: $vcvars"
+
+          ver_arg=""
+          if ls "$vs/VC/Tools/MSVC" 2>/dev/null | grep -q '^14\.2'; then
+            ver_arg="-vcvars_ver=14.2"
+            echo "v142 toolset present — selecting it ($ver_arg)"
+          else
+            echo "::warning::windows: no v142 toolset; using the default."
+            echo "  boost.py has no branch newer than msvc-14.2, so this may be"
+            echo "  the next blocker. Letting it proceed to find out."
+          fi
+
+          cmd //c "call \"$vcvars\" x64 $ver_arg >nul && set" \
+            | tr -d '\r' > /tmp/vcenv.txt
+          for var in PATH INCLUDE LIB LIBPATH; do
+            line="$(grep -i "^$var=" /tmp/vcenv.txt | head -1 || true)"
+            [ -n "$line" ] && echo "$line" >> "$GITHUB_ENV"
+          done
+          echo "cl on PATH after setup: $(grep -ic '^PATH=.*VC' /tmp/vcenv.txt || true)"
+
       - name: Bootstrap the upstream tree
         if: steps.deps.outputs.qt == 'ok'
         shell: bash
