@@ -240,6 +240,18 @@ echo
 echo "Running upstream build (this takes hours) ..."
 cd "$BUILD_TOOLS"
 
+# The CMake modules hardcode the "Visual Studio 16 2019" generator, which
+# resolves a real VS instance and finds none -- run 34672136278 spent 94
+# minutes reaching x265 to discover that. Make the generator overridable and
+# ask for 2022 with the v142 toolset, matching what vcvarsall selected and
+# what Qt and boost are built against. See scripts/patch_vs2022_generator.sh.
+phase_begin patch-vs-generator
+"$ROOT/scripts/patch_vs2022_generator.sh" "$SRC"
+export LIGHTOFFICE_VS_GENERATOR="${LIGHTOFFICE_VS_GENERATOR:-17 2022}"
+export LIGHTOFFICE_VS_TOOLSET="${LIGHTOFFICE_VS_TOOLSET:-v142}"
+echo "cmake generator: Visual Studio $LIGHTOFFICE_VS_GENERATOR -T $LIGHTOFFICE_VS_TOOLSET"
+phase_end
+
 phase_begin configure
 python3 -u ./configure.py \
     --branch master --module desktop --update 0 \
