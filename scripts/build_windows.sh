@@ -291,6 +291,14 @@ cd "$BUILD_TOOLS"
 # minutes reaching x265 to discover that. Make the generator overridable and
 # ask for 2022 with the v142 toolset, matching what vcvarsall selected and
 # what Qt and boost are built against. See scripts/patch_vs2022_generator.sh.
+# Two nested fetches (brotli, harfbuzz) invoke their make.py as a bare path,
+# which does nothing on Windows and returns 0. freetype then fails 90 minutes
+# later on a header that was never downloaded. See
+# scripts/patch_win_submake_python.sh.
+phase_begin patch-submake
+"$ROOT/scripts/patch_win_submake_python.sh" "$SRC"
+phase_end
+
 phase_begin patch-vs-generator
 "$ROOT/scripts/patch_vs2022_generator.sh" "$SRC"
 export LIGHTOFFICE_VS_GENERATOR="${LIGHTOFFICE_VS_GENERATOR:-17 2022}"
@@ -306,6 +314,29 @@ phase_end
 
 phase_begin make.py
 python3 -u ./make.py
+phase_end
+
+# make.py prints "[fetch & build]: <module>" whether or not the fetch did
+# anything -- brotli and harfbuzz both announced themselves and silently
+# cloned nothing, and the build only noticed 90 minutes later inside freetype.
+# Assert the trees exist instead of trusting the banner.
+phase_begin verify-3dparty
+missing=0
+for _d in \
+  "$SRC/core/Common/3dParty/brotli/brotli/c/include/brotli/decode.h" \
+  "$SRC/core/Common/3dParty/harfbuzz/harfbuzz"; do
+  if [ -e "$_d" ]; then
+    ok "fetched: ${_d#$SRC/}"
+  else
+    bad "never fetched: ${_d#$SRC/}"
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  echo "      a nested make.py announced itself and did nothing." >&2
+  echo "      see scripts/patch_win_submake_python.sh" >&2
+  exit 1
+fi
 phase_end
 
 CORE_OUT="$BUILD_TOOLS/out/$OUT_DIR/$COMPANY/$PRODUCT"
