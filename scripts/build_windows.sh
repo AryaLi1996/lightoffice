@@ -150,6 +150,32 @@ fi
 # because MSVC reaches PATH only after vcvarsall.bat, which a Developer Command
 # Prompt runs and a plain shell does not. Checking for the compiler itself is
 # the check that would have caught it in a second.
+# Git for Windows ships a coreutils `link` in /usr/bin -- it makes hard links --
+# and MSYS puts /usr/bin at the FRONT of PATH, ahead of anything vcvarsall
+# exported. nmake invokes a bare `link`, so it gets that one. Run 34684158639
+# spent 86 minutes reaching:
+#
+#   link /NOLOGO /DYNAMICBASE ... /OUT:..\build\lib\win_64\UnicodeConverter.dll
+#   /usr/bin/link: extra operand '/NXCOMPAT'
+#   NMAKE : fatal error U1077: '"C:\Program Files\Git\usr\bin\link.EXE"'
+#
+# MSVC's link.exe sits in the same directory as cl.exe, so locate that rather
+# than hardcoding a toolchain path, and put it first. Done before the checks
+# below so the `link` check sees the corrected PATH.
+if command -v cl.exe >/dev/null 2>&1 || command -v cl >/dev/null 2>&1; then
+  _cl="$(command -v cl.exe 2>/dev/null || command -v cl)"
+  _cl_dir="$(dirname "$_cl")"
+  case ":$PATH:" in
+    *":$_cl_dir:"*) PATH="$_cl_dir:$(printf '%s' "$PATH" | sed "s|:$_cl_dir:|:|g; s|^$_cl_dir:||")" ;;
+    *)              PATH="$_cl_dir:$PATH" ;;
+  esac
+  export PATH
+  # bash caches command lookups; without this a `link` resolved before the
+  # reorder would keep answering from the old PATH.
+  hash -r 2>/dev/null || true
+  ok "put the MSVC toolchain dir first on PATH ($_cl_dir)"
+fi
+
 if command -v cl >/dev/null 2>&1 || command -v cl.exe >/dev/null 2>&1; then
   ok "cl is on PATH ($(cl 2>&1 | head -1 | tr -d '\r' || true))"
 else
@@ -157,6 +183,26 @@ else
   echo "      run vcvarsall.bat x64 first, or use a Developer Command Prompt." >&2
   echo "      in CI this is the 'Set up the MSVC environment' step." >&2
   fatal=1
+fi
+
+# nmake calls a bare `link`. If that still resolves into Git's /usr/bin the
+# build dies 86 minutes in, at the first DLL it tries to produce, so check the
+# resolution rather than mere presence -- the same "installed vs usable"
+# distinction that cost three earlier runs.
+# link.exe first: that is what nmake actually resolves. Git bash will also find
+# a bare `link`, and Git's coreutils one has no .exe sibling in MSVC's dir, so
+# asking for the bare name alone can answer for the wrong binary.
+if command -v link.exe >/dev/null 2>&1 || command -v link >/dev/null 2>&1; then
+  _link="$(command -v link.exe 2>/dev/null || command -v link)"
+  case "$_link" in
+    *[Mm][Ss][Vv][Cc]*|*/VC/*|*\\VC\\*) ok "link resolves to MSVC ($_link)" ;;
+    *) bad "link resolves to $_link, not MSVC's linker"
+       echo "      Git for Windows' coreutils link shadows it; nmake will fail" >&2
+       echo "      with \"extra operand '/NXCOMPAT'\" at the first DLL." >&2
+       fatal=1 ;;
+  esac
+else
+  bad "link is not on PATH — nmake needs MSVC's linker"; fatal=1
 fi
 
 # grunt drives the JS stage (sdkjs, web-apps) via build_tools/scripts/build_js.py,
