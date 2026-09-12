@@ -603,6 +603,117 @@ jobs:
             echo "qt=missing" >> "$GITHUB_OUTPUT"
           fi
 
+      # THE COMPILER IS NOT ON PATH UNTIL vcvarsall RUNS. Run 34666010157 hit
+      # this 4m46s in, after cloning all of Boost:
+      #
+      #   Building Boost.Build engine
+      #   'cl' is not recognized as an internal or external command
+      #   Failed to build Boost.Build engine.
+      #   Error (bootstrap.bat): 1
+      #
+      # Not the vc143 gap that was expected -- simpler and more basic. MSVC
+      # only reaches PATH after vcvarsall.bat, which is what a "Developer
+      # Command Prompt" does for you and what a plain bash step does not. The
+      # preflight checked that Visual Studio was INSTALLED, which was true and
+      # not the question; it never checked that the compiler was CALLABLE.
+      #
+      # -vcvars_ver=14.2 selects the v142 toolset when it is present, because
+      # that is the newest boost.py has a branch for. Falling back to the
+      # default when it is absent is deliberate: it gets the build moving and
+      # the next failure then tells us whether vc143 really is a problem,
+      # rather than stopping here on a prediction.
+      #
+      # Only PATH/INCLUDE/LIB/LIBPATH are exported. Dumping all of `set` into
+      # GITHUB_ENV drags in multi-line and quoted values that corrupt the file.
+      - name: Set up the MSVC environment
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        run: |
+          vswhere="/c/Program Files (x86)/Microsoft Visual Studio/Installer/vswhere.exe"
+          vs="$("$vswhere" -latest -property installationPath | tr -d '\r')"
+          vcvars="$vs\\VC\\Auxiliary\\Build\\vcvarsall.bat"
+          echo "vcvarsall: $vcvars"
+
+          ver_arg=""
+          if ls "$vs/VC/Tools/MSVC" 2>/dev/null | grep -q '^14\.2'; then
+            ver_arg="-vcvars_ver=14.2"
+            echo "v142 toolset present — selecting it ($ver_arg)"
+          else
+            echo "::warning::windows: no v142 toolset; using the default."
+            echo "  boost.py has no branch newer than msvc-14.2, so this may be"
+            echo "  the next blocker. Letting it proceed to find out."
+          fi
+
+          # Via a batch file rather than `cmd //c "call \"$vcvars\" ..."`.
+          # That form died with
+          #   '\"C:\Program Files\...\vcvarsall.bat\"' is not recognized
+          # because the backslash-escaped quotes bash hands to cmd survive as
+          # literal characters in the command token, so cmd looks for a program
+          # whose name begins with a quote. A batch file has no nested quoting
+          # to get wrong, and its own "..." around the path is plain cmd syntax.
+          # Kept in RUNNER_TEMP (D:\a\_temp) and invoked by bare filename from
+          # that directory, so no path with a space ever reaches a command line.
+          bat="$RUNNER_TEMP/lightoffice_vcenv.bat"
+          {
+            echo "@echo off"
+            echo "call \"$vcvars\" x64 $ver_arg >nul || exit /b 1"
+            echo "set"
+          } > "$bat"
+
+          if ! ( cd "$RUNNER_TEMP" && cmd //c lightoffice_vcenv.bat ) \
+                 | tr -d '\r' > /tmp/vcenv.txt; then
+            echo "::error::windows: vcvarsall.bat failed"
+            sed 's/^/  /' "$bat"
+            head -20 /tmp/vcenv.txt | sed 's/^/  /'
+            exit 1
+          fi
+
+          # An empty or PATH-less dump means vcvarsall ran but set nothing, which
+          # would otherwise surface 5 minutes later as 'cl' is not recognized.
+          if ! grep -qi '^PATH=' /tmp/vcenv.txt; then
+            echo "::error::windows: vcvarsall.bat produced no PATH — nothing to export"
+            head -20 /tmp/vcenv.txt | sed 's/^/  /'
+            exit 1
+          fi
+
+          for var in PATH INCLUDE LIB LIBPATH; do
+            line="$(grep -i "^$var=" /tmp/vcenv.txt | head -1 || true)"
+            if [ -n "$line" ]; then
+              echo "$line" >> "$GITHUB_ENV"
+              echo "exported $var (${#line} chars)"
+            else
+              echo "::warning::windows: vcvarsall set no $var"
+            fi
+          done
+
+          # Prove cl.exe is actually on the PATH we just exported, rather than
+          # trusting that vcvarsall did its job. Not with `command -v`: the
+          # dumped PATH is a Windows one (C:\... entries, ';' separators) and
+          # bash cannot search it. Walk it instead, converting each entry.
+          # GITHUB_ENV only applies to later steps, so this has to read the dump.
+          found=""
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            # cygpath is the conversion Git bash ships for exactly this; the
+            # sed is the fallback, and lowercases the drive letter because
+            # vswhere reports "C:" while the MSYS mount is /c.
+            if command -v cygpath >/dev/null 2>&1; then
+              p="$(cygpath -u "$dir" 2>/dev/null || true)"
+            else
+              p="$(printf '%s' "$dir" | sed 's|\\|/|g; s|^\([A-Za-z]\):|/\1|' \
+                    | sed 's|^/\(.\)|/\L\1|')"
+            fi
+            [ -n "$p" ] || continue
+            if [ -x "$p/cl.exe" ]; then found="$dir"; break; fi
+          done <<< "$(grep -i '^PATH=' /tmp/vcenv.txt | head -1 | cut -d= -f2- | tr ';' '\n')"
+
+          if [ -n "$found" ]; then
+            echo "cl.exe found on the exported PATH: $found"
+          else
+            echo "::warning::windows: no cl.exe on the exported PATH —"
+            echo "  the preflight will say so before the build burns time on it"
+          fi
+
       - name: Bootstrap the upstream tree
         if: steps.deps.outputs.qt == 'ok'
         shell: bash

@@ -142,6 +142,23 @@ else
   bad "vswhere not found — no Visual Studio installation to query"; fatal=1
 fi
 
+# Installed is not the same as usable, and only the second one matters. Run
+# 34666010157 passed this preflight and then died 4m46s later on
+#
+#   'cl' is not recognized as an internal or external command
+#
+# because MSVC reaches PATH only after vcvarsall.bat, which a Developer Command
+# Prompt runs and a plain shell does not. Checking for the compiler itself is
+# the check that would have caught it in a second.
+if command -v cl >/dev/null 2>&1 || command -v cl.exe >/dev/null 2>&1; then
+  ok "cl is on PATH ($(cl 2>&1 | head -1 | tr -d '\r' || true))"
+else
+  bad "cl (the MSVC compiler) is not on PATH — the MSVC environment is not set up"
+  echo "      run vcvarsall.bat x64 first, or use a Developer Command Prompt." >&2
+  echo "      in CI this is the 'Set up the MSVC environment' step." >&2
+  fatal=1
+fi
+
 # 3. Qt. Same rule as macOS: upstream derives the Qt VERSION from the deploy
 #    path (base.py takes QT_DEPLOY.split("/")[-3] and keeps digits and dots),
 #    so the directory must look like <...>/Qt-<version>/<compiler>/<...>.
