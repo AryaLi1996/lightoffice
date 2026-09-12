@@ -1,0 +1,56 @@
+Boost 1.72 mpl: give integral_c a step helper that is safe for enums.
+
+mpl::integral_c<T,N> unconditionally defines
+
+    next  = integral_c<T, static_cast<T>(N + 1)>
+    prior = integral_c<T, static_cast<T>(N - 1)>
+
+as member typedefs, so both are instantiated whenever the class is, whether
+or not anyone asks for them. When T is an enumeration without a fixed
+underlying type, static_cast<T> of a value outside the enumeration's range is
+undefined behaviour, and undefined behaviour is not a constant expression --
+so the non-type template argument is ill-formed. C++ has always said so;
+clang only began enforcing it, and from clang 20 the -Wno-enum-constexpr-
+conversion escape hatch no longer suppresses the resulting hard error.
+
+This half of the fix adds the helper. boost::mpl::aux::wrapper_step<T> steps
+in the ordinary way for arithmetic T, and is specialised for enumerations to
+report the value unchanged: stepping an enumeration is not meaningful, the
+typedefs exist only because the class template defines them unconditionally,
+and nothing in Boost or in this tree reads integral_c<Enum,N>::next/prior.
+
+Guarded on C++11, which is where constexpr is available; below that nothing
+is defined and integral_wrapper.hpp keeps its original code path verbatim.
+
+<<<<<<<
+BOOST_MPL_AUX_ADL_BARRIER_NAMESPACE_OPEN
+
+template< AUX_WRAPPER_PARAMS(N) >
+struct AUX_WRAPPER_NAME
+{
+=======
+#if !defined(BOOST_MPL_AUX_ENUM_SAFE_STEP_DEFINED) \
+    && defined(__cplusplus) && (__cplusplus >= 201103L)
+#   define BOOST_MPL_AUX_ENUM_SAFE_STEP_DEFINED
+#   define BOOST_MPL_AUX_ENUM_SAFE_STEP
+namespace boost { namespace mpl { namespace aux {
+template< typename T, bool IsEnum = __is_enum(T) >
+struct wrapper_step
+{
+    static constexpr T next(T v) { return static_cast<T>(v + 1); }
+    static constexpr T prior(T v) { return static_cast<T>(v - 1); }
+};
+template< typename T >
+struct wrapper_step< T, true >
+{
+    static constexpr T next(T v) { return v; }
+    static constexpr T prior(T v) { return v; }
+};
+} } }
+#endif
+
+BOOST_MPL_AUX_ADL_BARRIER_NAMESPACE_OPEN
+
+template< AUX_WRAPPER_PARAMS(N) > struct AUX_WRAPPER_NAME
+{
+>>>>>>>

@@ -1,0 +1,28 @@
+Boost 1.72 mpl: route integral_c's next/prior through the enum-safe step.
+
+The companion to mpl_integral_wrapper_step.patch. Where the step helper is
+available (C++11 and later) next/prior are computed through it; otherwise the
+original expressions are kept byte-for-byte, so pre-C++11 compilers and every
+platform that does not define BOOST_MPL_AUX_ENUM_SAFE_STEP build exactly the
+code they built before.
+
+The fallback branch is respelled (value+1) rather than (value + 1) so that the
+replaced text does not occur in the replacement: base.apply_patch is a plain
+textual substitution with no record of having run, and boost.py re-applies it
+on every make.py. Without the respelling a second application would nest the
+conditional inside its own #else and produce an #elif after an #else.
+
+<<<<<<<
+#else
+    typedef AUX_WRAPPER_INST( BOOST_MPL_AUX_STATIC_CAST(AUX_WRAPPER_VALUE_TYPE, (value + 1)) ) next;
+    typedef AUX_WRAPPER_INST( BOOST_MPL_AUX_STATIC_CAST(AUX_WRAPPER_VALUE_TYPE, (value - 1)) ) prior;
+#endif
+=======
+#elif defined(BOOST_MPL_AUX_ENUM_SAFE_STEP)
+    typedef AUX_WRAPPER_INST( ::boost::mpl::aux::wrapper_step< AUX_WRAPPER_VALUE_TYPE >::next(value) ) next;
+    typedef AUX_WRAPPER_INST( ::boost::mpl::aux::wrapper_step< AUX_WRAPPER_VALUE_TYPE >::prior(value) ) prior;
+#else
+    typedef AUX_WRAPPER_INST( BOOST_MPL_AUX_STATIC_CAST(AUX_WRAPPER_VALUE_TYPE, (value+1)) ) next;
+    typedef AUX_WRAPPER_INST( BOOST_MPL_AUX_STATIC_CAST(AUX_WRAPPER_VALUE_TYPE, (value-1)) ) prior;
+#endif
+>>>>>>>

@@ -122,6 +122,12 @@ if need_src; then
   else emit "toolbar reduction" MISSING "scripts/count_toolbar.sh not found"; fi
   if [ -x scripts/check_qt_compat.sh ]; then run "desktop-apps compiles vs Qt" scripts/check_qt_compat.sh "$SRC"
   else emit "desktop-apps compiles vs Qt" MISSING "scripts/check_qt_compat.sh not found"; fi
+  # The macOS build dies in Boost 1.72's mpl 30 minutes in. This reproduces
+  # that in about a second with whatever clang is on the box, so the patch is
+  # checked here rather than on the runner.
+  if [ -x scripts/check_boost_enum_patch.sh ]; then
+    run "boost mpl enum-constexpr patch" scripts/check_boost_enum_patch.sh
+  else emit "boost mpl enum-constexpr patch" MISSING "scripts/check_boost_enum_patch.sh not found"; fi
 else
   emit "zh locale coverage" SKIP "no upstream checkout at $SRC"
   emit "toolbar reduction" SKIP "no upstream checkout at $SRC"
