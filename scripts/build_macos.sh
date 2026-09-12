@@ -359,7 +359,24 @@ if command -v npx >/dev/null; then
   phase_begin appdmg
   cfg="$SRC/desktop-apps/macos/fastlane/resources/appdmg.json"
   if [ -f "$cfg" ]; then
-    tmpcfg="$(mktemp -d)/appdmg.json"
+    # appdmg resolves EVERY path in the spec relative to the spec file's own
+    # directory, so the rewritten copy has to sit beside the original. Writing
+    # it to a mktemp -d instead is what broke run 34672136278: the app path had
+    # been absolutised so steps 1-9 passed, and then step 10 could not find the
+    # background that lives next to the real config --
+    #
+    #   [10/21] Copying background...               [FAIL]
+    #   Error: ENOENT: no such file or directory, copyfile
+    #     '/var/folders/.../T/tmp.YTXqXsc8dj/background.png'
+    #     -> '/Volumes/ONLYOFFICE/.background/background.png'
+    #
+    # background@2x.png is picked up implicitly from the same directory and
+    # would have been the next thing to fail.
+    #
+    # Named, not mktemp: it has to be in this directory, and a predictable name
+    # is removable on exit rather than accumulating across runs.
+    tmpcfg="$(dirname "$cfg")/appdmg.lightoffice.json"
+    trap 'rm -f "$tmpcfg"' EXIT
     python3 - "$cfg" "$tmpcfg" "$APP" <<'PY'
 import json, sys
 src, dst, app = sys.argv[1:4]
