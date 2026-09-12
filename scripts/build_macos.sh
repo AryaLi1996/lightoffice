@@ -175,8 +175,19 @@ if [ -n "$QT_PREFIX" ] && [ -x "$QT_PREFIX/bin/qmake" ]; then
     # the compile succeeds and the link dies with every Qt symbol undefined,
     # which reads like a missing Qt rather than the wrong one. Naming it here
     # costs a second; finding it at the link cost 18 minutes last time.
-    qt_core="$(ls "$QT_PREFIX"/lib/QtCore.framework/Versions/*/QtCore \
-                  "$QT_PREFIX"/lib/libQt5Core.dylib 2>/dev/null | head -1)"
+    # A glob loop, NOT `ls a b 2>/dev/null | head -1`. That was the first
+    # version and it killed the whole preflight: ls exits non-zero when any
+    # operand is missing, pipefail propagates it, and `set -e` then aborts the
+    # assignment -- silently, because stderr was suppressed. The script died
+    # after "npx (for appdmg)" with no message and exit 1, which is how run
+    # 34663626582 lost its arm64 leg in under a second. Same shape as the
+    # `[ -n "$prefix" ] && cmd` bug in the workflow: a command whose non-zero
+    # status is an expected outcome, treated as fatal.
+    qt_core=""
+    for _c in "$QT_PREFIX"/lib/QtCore.framework/Versions/*/QtCore \
+              "$QT_PREFIX"/lib/libQt5Core.dylib; do
+      [ -f "$_c" ] && { qt_core="$_c"; break; }
+    done
     if [ -n "$qt_core" ]; then
       qt_archs="$(lipo -archs "$qt_core" 2>/dev/null || true)"
       case " $qt_archs " in
