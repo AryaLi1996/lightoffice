@@ -340,7 +340,49 @@ else
   record 3.2 FAIL "未找到内网默认地址" "命中文件数=$cfgs"
 fi
 
+
+# Is this evidence file the product of THIS run, or the committed baseline?
+#
+# AC 3.3/3.4/3.5 are judged from baseline/coedit.json and
+# baseline/filelock.result. Both are tracked in git, so they exist even where
+# no stack was ever started -- and for five days the report claimed
+# "3.3 PASS / 3.4 ADJUSTED / 3.5 PASS" on the strength of a recording made on
+# 2026-09-07, including in Integration runs where the tests never executed
+# (the job died at the proxy healthcheck) and in the repo-only PR job where
+# there is no Nextcloud at all. A criterion cannot be evidenced by a file
+# asserting it was evidenced once.
+#
+# mtime cannot tell them apart: a fresh CI checkout stamps every tracked file
+# with the checkout time. git can. A tracked file identical to HEAD is the
+# committed baseline; one that is modified or untracked was written by this
+# run. If git is unavailable, say so rather than assume freshness.
+evidence_origin() {
+  local f="$1"
+  command -v git >/dev/null 2>&1 || { echo unknown; return; }
+  git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1 || { echo unknown; return; }
+  if ! git -C "$ROOT" ls-files --error-unmatch "$f" >/dev/null 2>&1; then
+    echo fresh; return                     # untracked -> written by this run
+  fi
+  if git -C "$ROOT" diff --quiet -- "$f" 2>/dev/null; then
+    echo baseline                          # identical to HEAD -> committed
+  else
+    echo fresh                             # modified -> written by this run
+  fi
+}
+
+# When the evidence is the committed baseline, a PASS overstates it: the
+# criterion was demonstrated once, not here. ADJUSTED carries that honestly.
+evidence_note() {
+  case "$1" in
+    baseline) printf '证据来自提交基线（%s），非本次运行——如需现场验证请运行 Integration workflow' "$2" ;;
+    unknown)  printf '无法判断证据是否来自本次运行（git 不可用）' ;;
+    *)        printf '' ;;
+  esac
+}
+
 CO="$ROOT/baseline/coedit.json"
+CO_ORIGIN="$(evidence_origin baseline/coedit.json)"
+CO_GEN="$(jq -r '.generated // "?"' "$CO" 2>/dev/null || echo "?")"
 LOGF="${LIGHTOFFICE_CONSOLE_LOG:-$ROOT/logs/console.log}"
 if [ -f "$CO" ]; then
   wsurl=$(jq -r '.sessions.Alice.websockets[]?.url | select(test("/doc/.*/c/"))' "$CO" 2>/dev/null | head -1)
@@ -348,8 +390,13 @@ if [ -f "$CO" ]; then
   recv=$(jq -r '[.sessions[].websockets[]? | select(.url|test("/doc/.*/c/")) | .received] | add // 0' "$CO")
   if [ -n "$wsurl" ] && [ "${sent:-0}" -gt 0 ] && [ "${recv:-0}" -gt 0 ]; then
     handshakes=$( [ -f "$LOGF" ] && grep -c "101 Switching Protocols" "$LOGF" || echo 0 )
-    record 3.3 PASS "协同编辑 WebSocket 完成 101 升级并持续收发" \
-      "$wsurl（双方合计 sent=$sent received=$recv）；$LOGF 中另有 $handshakes 条 101 握手记录"
+    if [ "$CO_ORIGIN" = fresh ]; then
+      record 3.3 PASS "协同编辑 WebSocket 完成 101 升级并持续收发" \
+        "$wsurl（双方合计 sent=$sent received=$recv）；$LOGF 中另有 $handshakes 条 101 握手记录"
+    else
+      record 3.3 ADJUSTED "协同编辑 WebSocket 判据通过，但证据非本次运行" \
+        "$(evidence_note "$CO_ORIGIN" "$CO_GEN")。记录内容: $wsurl（双方合计 sent=$sent received=$recv）"
+    fi
   else
     record 3.3 FAIL "未捕获到有效的协同 WebSocket" "$CO"
   fi
@@ -365,8 +412,8 @@ if [ -f "$CO" ]; then
   errs=$(jq -r '[.sessions[].events[] | select(startswith("onError"))] | length' "$CO")
   crdt_files=$(grep -rl "change set applied" "$SRC/core" "$SRC/sdkjs" 2>/dev/null | wc -l)
   if [ "$a_recv" != "-1" ] && [ "$b_recv" != "-1" ] && [ "$a_cur" != "-1" ] && [ "${errs:-1}" -eq 0 ]; then
-    record 3.4 ADJUSTED "字面判据不成立：ONLYOFFICE 用 OT 而非 CRDT，且无该日志串" \
-      "字面: \"change set applied\" 在 core/sdkjs 中出现于 $crdt_files 个文件（=0）；\"CRDT\" 的命中全部是测试夹具里的 base64 片段。实际机制是 Operational Transformation。等价判据已通过: 两个真实编辑器会话并发编辑同一文档，双方各自收到对方的 saveChanges 变更集（Alice 收到=是, Bob 收到=是），光标位置双向同步，且无 onError 事件（errs=$errs）。"
+    record 3.4 ADJUSTED "字面判据不成立：ONLYOFFICE 用 OT 而非 CRDT，且无该日志串$([ "$CO_ORIGIN" = fresh ] || echo "；且证据非本次运行")" \
+      "$([ "$CO_ORIGIN" = fresh ] || { evidence_note "$CO_ORIGIN" "$CO_GEN"; printf '。'; })字面: \"change set applied\" 在 core/sdkjs 中出现于 $crdt_files 个文件（=0）；\"CRDT\" 的命中全部是测试夹具里的 base64 片段。实际机制是 Operational Transformation。等价判据已通过: 两个真实编辑器会话并发编辑同一文档，双方各自收到对方的 saveChanges 变更集（Alice 收到=是, Bob 收到=是），光标位置双向同步，且无 onError 事件（errs=$errs）。"
   else
     record 3.4 FAIL "并发变更集未双向送达" "alice_recv=$a_recv bob_recv=$b_recv alice_cursor=$a_cur errors=$errs"
   fi
@@ -375,6 +422,7 @@ else
 fi
 
 LK="$ROOT/baseline/filelock.result"
+LK_ORIGIN="$(evidence_origin baseline/filelock.result)"
 if [ -f "$LK" ]; then
   n423=$(grep -c ' 423' "$LK"); n201=$(grep -cE ' (200|201|204)' "$LK")
   n000=$(grep -c ' 000' "$LK")
@@ -386,8 +434,13 @@ if [ -f "$LK" ]; then
     record 3.5 BLOCKED "并发写入未到达服务端（全部 000）" \
       "地址或证书不匹配，抑或端口未发布——这不是锁失效。重跑 scripts/test_filelock.sh 并核对 --portal/--cacert"
   elif [ "$n423" -ge 1 ] && [ "$n201" -ge 1 ]; then
-    record 3.5 PASS "并发写入同名文件时返回 HTTP 423 Locked" \
-      "$n201 个写入成功，$n423 个被锁拒绝(423)；Nextcloud 事务性文件锁 (DBLockingProvider)"
+    if [ "$LK_ORIGIN" = fresh ]; then
+      record 3.5 PASS "并发写入同名文件时返回 HTTP 423 Locked" \
+        "$n201 个写入成功，$n423 个被锁拒绝(423)；Nextcloud 事务性文件锁 (DBLockingProvider)"
+    else
+      record 3.5 ADJUSTED "文件锁判据通过，但证据非本次运行" \
+        "$(evidence_note "$LK_ORIGIN" "-")。记录内容: $n201 个写入成功，$n423 个被锁拒绝(423)"
+    fi
   elif [ "$n423" -ge 1 ] && [ -n "$solo" ] && grep -qE '^(200|201|204)$' <<<"$solo"; then
     record 3.5 PASS "并发写入全部被 423 拒绝，随后单独写入成功（$solo）" \
       "全部竞争者被拒同样证明写入被串行化；单独写入成功说明锁会释放，文件未被卡死。DBLockingProvider 在共享锁升级失败时可拒绝全部竞争者。"
