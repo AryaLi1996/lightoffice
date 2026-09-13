@@ -319,11 +319,23 @@ elif [ -n "$_cl_for_jam" ]; then
   _cl_jam_path="$(printf '%s' "$_cl_for_jam" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
 fi
 if [ -n "${_cl_jam_path:-}" ]; then
-  LIGHTOFFICE_BOOST_USER_CONFIG="$SRC/build_tools/lightoffice-user-config.jam"
-  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$LIGHTOFFICE_BOOST_USER_CONFIG"
+  _uc_posix="$SRC/build_tools/lightoffice-user-config.jam"
+  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$_uc_posix"
+  # b2.exe is a native Windows program and cannot resolve an MSYS path. The
+  # Windows job sets LIGHTOFFICE_SRC=/c/lightoffice/src, so the first version
+  # of this passed --user-config=/c/lightoffice/src/... , b2 silently ignored
+  # a file it could not open, the toolset pin did nothing, and the build
+  # failed 112 minutes later on the same unresolved __std_mismatch. The cl.exe
+  # path INSIDE the file was converted; the path TO the file was not.
+  if command -v cygpath >/dev/null 2>&1; then
+    LIGHTOFFICE_BOOST_USER_CONFIG="$(cygpath -m "$_uc_posix")"
+  else
+    LIGHTOFFICE_BOOST_USER_CONFIG="$(printf '%s' "$_uc_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
+  fi
   export LIGHTOFFICE_BOOST_USER_CONFIG
+  ok "b2 --user-config=$LIGHTOFFICE_BOOST_USER_CONFIG"
   ok "boost will build with $_cl_jam_path"
-  sed 's/^/      /' "$LIGHTOFFICE_BOOST_USER_CONFIG"
+  sed 's/^/      /' "$_uc_posix"
 else
   warn "no cl.exe to pin — boost may build with a different toolset than it links"
 fi
@@ -375,6 +387,18 @@ fi
 # a plain string in the COFF symbol table, so grep answers in a moment.
 _bregex="$SRC/core/Common/3dParty/boost/build/win_64/lib/libboost_regex-vc142-mt-x64-1_72.lib"
 if [ -f "$_bregex" ]; then
+  # Report the evidence, not just the verdict. On the 112-minute run this
+  # check either passed or never ran and the log could not tell me which --
+  # the file is far too large to page back to. "boost" is a positive control:
+  # if it is absent too, the grep is not reading what I think it is.
+  _n_mismatch=$(grep -ac "__std_mismatch" "$_bregex" || true)
+  _n_control=$(grep -ac "boost" "$_bregex" || true)
+  echo "      $_bregex ($(wc -c < "$_bregex") bytes)"
+  echo "      __std_mismatch hits=$_n_mismatch   control 'boost' hits=$_n_control"
+  if [ "${_n_control:-0}" -eq 0 ]; then
+    warn "the control string is absent — this check cannot see inside the archive,"
+    warn "  so a zero __std_mismatch count proves nothing here"
+  fi
   if grep -aq "__std_mismatch" "$_bregex"; then
     bad "boost was compiled by a newer toolset than the one linking it"
     echo "      $_bregex references __std_mismatch_*, which only the VS 2022" >&2
