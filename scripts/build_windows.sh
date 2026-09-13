@@ -299,6 +299,36 @@ phase_begin patch-submake
 "$ROOT/scripts/patch_win_submake_python.sh" "$SRC"
 phase_end
 
+# boost's b2 is told --toolset=msvc-14.2, which names a toolset but pins no
+# compiler path; it searches for a VS 2019 install, finds none on a VS 2022
+# runner, and builds with its default while still naming the output vc142.
+# Run 34697916039 linked for 95 minutes before the mislabelled library showed
+# up as unresolved __std_mismatch_1/2. Declare the compiler explicitly.
+phase_begin patch-boost-toolset
+"$ROOT/scripts/patch_boost_toolset.sh" "$SRC"
+
+# Derived from the cl.exe already on PATH, not hardcoded: no assumption about
+# which MSVC point release this runner ships. Forward slashes (cygpath -m)
+# because Boost.Build treats a backslash as an escape.
+_cl_for_jam="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
+if [ -n "$_cl_for_jam" ] && command -v cygpath >/dev/null 2>&1; then
+  _cl_jam_path="$(cygpath -m "$_cl_for_jam")"
+elif [ -n "$_cl_for_jam" ]; then
+  # \U uppercases the drive letter: cosmetic (Windows is case-insensitive
+  # here) but it keeps the log matching what every other path prints.
+  _cl_jam_path="$(printf '%s' "$_cl_for_jam" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
+fi
+if [ -n "${_cl_jam_path:-}" ]; then
+  LIGHTOFFICE_BOOST_USER_CONFIG="$SRC/build_tools/lightoffice-user-config.jam"
+  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$LIGHTOFFICE_BOOST_USER_CONFIG"
+  export LIGHTOFFICE_BOOST_USER_CONFIG
+  ok "boost will build with $_cl_jam_path"
+  sed 's/^/      /' "$LIGHTOFFICE_BOOST_USER_CONFIG"
+else
+  warn "no cl.exe to pin — boost may build with a different toolset than it links"
+fi
+phase_end
+
 phase_begin patch-vs-generator
 "$ROOT/scripts/patch_vs2022_generator.sh" "$SRC"
 export LIGHTOFFICE_VS_GENERATOR="${LIGHTOFFICE_VS_GENERATOR:-17 2022}"
@@ -336,6 +366,25 @@ if [ "$missing" -ne 0 ]; then
   echo "      a nested make.py announced itself and did nothing." >&2
   echo "      see scripts/patch_win_submake_python.sh" >&2
   exit 1
+fi
+
+# The boost libraries are named vc142 whatever actually compiled them, so the
+# name proves nothing. __std_mismatch_1/2 exist only in the VS 2022 era STL:
+# if they appear in a library we are about to link with v142, the toolset pin
+# did not take, and the link will fail 60 minutes from now. The symbol name is
+# a plain string in the COFF symbol table, so grep answers in a moment.
+_bregex="$SRC/core/Common/3dParty/boost/build/win_64/lib/libboost_regex-vc142-mt-x64-1_72.lib"
+if [ -f "$_bregex" ]; then
+  if grep -aq "__std_mismatch" "$_bregex"; then
+    bad "boost was compiled by a newer toolset than the one linking it"
+    echo "      $_bregex references __std_mismatch_*, which only the VS 2022" >&2
+    echo "      era STL provides, but this build links v142. The --user-config" >&2
+    echo "      pin did not take — see scripts/patch_boost_toolset.sh." >&2
+    exit 1
+  fi
+  ok "boost regex is free of VS2022-era STL symbols (toolset pin held)"
+else
+  warn "no libboost_regex-vc142 to check at $_bregex"
 fi
 phase_end
 
