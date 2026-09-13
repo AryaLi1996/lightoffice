@@ -800,26 +800,51 @@ jobs:
         run: |
           shopt -s nullglob
           found=(artifacts/WPS-Lite-win-*)
+
+          # Classify BEFORE the summary, not inside it. A `{ ... } | tee` block
+          # runs in a subshell, so neither an exit nor a variable assignment in
+          # there reaches this shell -- which is exactly how the old version
+          # managed to print "no installer produced" and still pass.
+          if [ ${#found[@]} -gt 0 ]; then
+            state=produced
+          elif [ "${{ steps.deps.outputs.qt }}" != "ok" ]; then
+            state=skipped
+          else
+            state=empty
+          fi
+
           {
             echo "### Windows build"
             echo
-            if [ ${#found[@]} -gt 0 ]; then
-              for f in "${found[@]}"; do
-                printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
-              done
-              echo
-              echo "Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
-              echo "we do not have, so SmartScreen warns on first run."
-            elif [ "${{ steps.deps.outputs.qt }}" != "ok" ]; then
-              echo "**No Qt, so the build was skipped.** See the dependency step."
-              echo "::warning::windows: skipped, no Qt on this runner"
-            else
-              echo "No installer produced. The build step is \`continue-on-error\`"
-              echo "because this build is still being brought up -- read its log"
-              echo "for the phase that stopped."
-              echo "::notice::windows: build did not produce an installer yet"
-            fi
+            case "$state" in
+              produced)
+                for f in "${found[@]}"; do
+                  printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
+                done
+                echo
+                echo "Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
+                echo "we do not have, so SmartScreen warns on first run."
+                ;;
+              skipped)
+                echo "**No Qt, so the build was skipped.** See the dependency step."
+                echo "::warning::windows: skipped, no Qt on this runner"
+                ;;
+              empty)
+                echo "**No installer produced.** Read the build step's log for the"
+                echo "phase that stopped."
+                echo "::error::windows: build produced no installer"
+                ;;
+            esac
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+          # The build step stays continue-on-error so this summary is always
+          # written and its log always survives. The job's conclusion is decided
+          # here instead. Until now a Windows build that produced nothing still
+          # reported SUCCESS, so the only way to find out it had failed was to
+          # notice the missing artifact -- which is how the last two failures
+          # were actually found, both times after the fact.
+          [ "$state" = empty ] && exit 1
+          exit 0
 
       # Guarded rather than deleted: when the native build above starts
       # producing artifacts/, this uploads them with no further change.
