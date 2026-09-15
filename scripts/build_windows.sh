@@ -334,10 +334,26 @@ if [ -n "$_vcvars_dir" ]; then
   LIGHTOFFICE_BOOST_VCVARS="$_vcvars_dir\\vcvarsall.bat"
   export LIGHTOFFICE_BOOST_VCVARS
   ok "boost vcvarsall: $LIGHTOFFICE_BOOST_VCVARS"
+  # Same path, second name. openssl.py needs it too, for the same reason
+  # (config.option("vs-path") is a hardcoded 2019 path), but it calls vcvarsall
+  # with no -vcvars_ver, so the two are not interchangeable in meaning even
+  # though they are the same file today. Kept separate so that changing boost's
+  # toolset cannot silently change openssl's.
+  LIGHTOFFICE_VCVARS="$_vcvars_dir\\vcvarsall.bat"
+  export LIGHTOFFICE_VCVARS
+  ok "openssl vcvarsall: $LIGHTOFFICE_VCVARS"
 else
   warn "no vcvarsall found — boost will build in the ambient environment,"
   warn "  which on a v143 runner fails with a 32/64 name clash"
 fi
+phase_end
+
+# openssl builds with its own vcvarsall call too, and config.option("vs-path")
+# is the same hardcoded 2019 path. It also ran with is_no_errors, so run
+# 34991067915 spent 94 minutes before the missing headers surfaced as a
+# C1083 in doctrenderer's hash.cpp. Both are fixed here.
+phase_begin patch-openssl-vcvars
+"$ROOT/scripts/patch_openssl_vcvars.sh" "$SRC"
 phase_end
 
 phase_begin patch-vs-generator
