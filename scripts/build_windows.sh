@@ -387,6 +387,11 @@ fi
 # a plain string in the COFF symbol table, so grep answers in a moment.
 _bregex="$SRC/core/Common/3dParty/boost/build/win_64/lib/libboost_regex-vc142-mt-x64-1_72.lib"
 if [ -f "$_bregex" ]; then
+  # Secondary gate. The primary check now runs inside boost.py the moment b2
+  # finishes installing (see scripts/patch_boost_toolset.sh); this one only
+  # ever runs on a build that already got past linking, which is precisely why
+  # it could not report the failure it was written for.
+  #
   # Report the evidence, not just the verdict. On the 112-minute run this
   # check either passed or never ran and the log could not tell me which --
   # the file is far too large to page back to. "boost" is a positive control:
