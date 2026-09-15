@@ -313,9 +313,30 @@ phase_end
 phase_begin patch-boost-toolset
 "$ROOT/scripts/patch_boost_toolset.sh" "$SRC"
 
-# Forward slashes (cygpath -m) because Boost.Build treats a backslash as an
-# escape. Not hardcoded: no assumption about the MSVC point release.
-_cl_for_jam="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
+# The compiler named here is the v142 one, NOT the ambient v143 compiler,
+# and the label 14.2 is therefore the truth.
+#
+# Naming the v143 cl.exe under the label 14.2 does not work: run 34986042357
+# reproduced the 32/64 name clash exactly, because msvc.jam checks the
+# compiler it was handed, finds 14.44 where 14.2 was claimed, and ends up
+# configuring both. Version and label have to agree.
+#
+# That is fine, and is the point of linking with v143. boost compiles v142
+# objects; the linker is v143; Microsoft's rule only forbids the reverse. This
+# is also the exact configuration boost built cleanly under for six runs -- the
+# libraries it produced were always linkable, just not by a v142 linker.
+_cl_ambient="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
+_cl_for_jam="$_cl_ambient"
+if [ -n "$_cl_ambient" ]; then
+  _vs_root="${_cl_ambient%/VC/Tools/MSVC/*}"
+  _v142_dir="$(ls -d "$_vs_root"/VC/Tools/MSVC/14.2* 2>/dev/null | head -1 || true)"
+  if [ -n "$_v142_dir" ] && [ -x "$_v142_dir/bin/HostX64/x64/cl.exe" ]; then
+    _cl_for_jam="$_v142_dir/bin/HostX64/x64/cl.exe"
+    ok "boost will compile with v142: $_cl_for_jam"
+  else
+    warn "no v142 toolset found — naming the ambient compiler, which may clash"
+  fi
+fi
 if [ -n "$_cl_for_jam" ] && command -v cygpath >/dev/null 2>&1; then
   _cl_jam_path="$(cygpath -m "$_cl_for_jam")"
 elif [ -n "$_cl_for_jam" ]; then
