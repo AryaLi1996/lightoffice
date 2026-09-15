@@ -299,94 +299,6 @@ phase_begin patch-submake
 "$ROOT/scripts/patch_win_submake_python.sh" "$SRC"
 phase_end
 
-# boost's b2 is told --toolset=msvc-14.2, which names a toolset but pins no
-# compiler path; it searches for a VS 2019 install, finds none on a VS 2022
-# runner, and builds with its default while still naming the output vc142.
-# Run 34697916039 linked for 95 minutes before the mislabelled library showed
-# up as unresolved __std_mismatch_1/2. Declare the compiler explicitly.
-phase_begin patch-boost-toolset
-"$ROOT/scripts/patch_boost_toolset.sh" "$SRC"
-
-# Derived from the cl.exe already on PATH, not hardcoded: no assumption about
-# which MSVC point release this runner ships. Forward slashes (cygpath -m)
-# because Boost.Build treats a backslash as an escape.
-_cl_for_jam="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
-if [ -n "$_cl_for_jam" ] && command -v cygpath >/dev/null 2>&1; then
-  _cl_jam_path="$(cygpath -m "$_cl_for_jam")"
-elif [ -n "$_cl_for_jam" ]; then
-  # \U uppercases the drive letter: cosmetic (Windows is case-insensitive
-  # here) but it keeps the log matching what every other path prints.
-  _cl_jam_path="$(printf '%s' "$_cl_for_jam" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
-fi
-if [ -n "${_cl_jam_path:-}" ]; then
-  _uc_posix="$SRC/build_tools/lightoffice-user-config.jam"
-
-  # Pinning cl.exe is NOT enough, which is what the first three attempts got
-  # wrong. Boost.Build's msvc.jam runs a setup script before every compile and,
-  # when none is given, derives one itself (tools/build/src/tools/msvc.jam,
-  # generate-setup-cmd): for version 14.2 it joins the compiler's directory
-  # with ..\..\..\..\..\Auxiliary\Build and calls that vcvarsall.bat. It
-  # never passes -vcvars_ver, so vcvarsall selects the DEFAULT toolset -- the
-  # newest installed, v143 -- and overwrites the INCLUDE we set with
-  # -vcvars_ver=14.2.
-  #
-  # So boost was compiled by v142's cl.exe against v143's HEADERS. That is
-  # precisely how a library named vc142 ends up referencing __std_mismatch_1:
-  # the pin fixed the compiler binary and left the headers alone.
-  #
-  # <setup-amd64> is msvc.jam's documented escape hatch (its option list and
-  # the manual both describe it). When it is set, generate-setup-cmd returns it
-  # untouched and derives nothing. Point it at a script that names the toolset.
-  _vcvars_dir=""
-  if [ -n "${vs2019_install:-}" ]; then
-    _vcvars_dir="$vs2019_install\\VC\\Auxiliary\\Build"
-  else
-    # The same directory msvc.jam walks to: VC/Auxiliary/Build. Strip at the
-    # /Tools/MSVC/ segment rather than counting dirnames -- two successive
-    # attempts at counting landed one and two levels short, and a stack of
-    # six dirnames says nothing about where it means to arrive.
-    _vcvars_dir="${_cl_for_jam%/Tools/MSVC/*}/Auxiliary/Build"
-    command -v cygpath >/dev/null 2>&1 && _vcvars_dir="$(cygpath -w "$_vcvars_dir")"
-  fi
-
-  _setup_posix="$SRC/build_tools/lightoffice-vcvars142.bat"
-  {
-    printf '@echo off\r\n'
-    printf 'rem Written by scripts/build_windows.sh. b2 invokes this instead of\r\n'
-    printf 'rem deriving its own vcvarsall call, which would omit -vcvars_ver and\r\n'
-    printf 'rem so select the newest toolset (v143) headers.\r\n'
-    printf 'call "%s\\vcvarsall.bat" x64 -vcvars_ver=14.2\r\n' "$_vcvars_dir"
-  } > "$_setup_posix"
-  if command -v cygpath >/dev/null 2>&1; then
-    _setup_jam="$(cygpath -m "$_setup_posix")"
-  else
-    _setup_jam="$(printf '%s' "$_setup_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
-  fi
-
-  printf 'using msvc : 14.2 : "%s" : <setup-amd64>"%s" ;\n' \
-    "$_cl_jam_path" "$_setup_jam" > "$_uc_posix"
-  ok "boost setup script: $_setup_jam"
-  sed 's/^/      /' "$_setup_posix"
-  # b2.exe is a native Windows program and cannot resolve an MSYS path. The
-  # Windows job sets LIGHTOFFICE_SRC=/c/lightoffice/src, so the first version
-  # of this passed --user-config=/c/lightoffice/src/... , b2 silently ignored
-  # a file it could not open, the toolset pin did nothing, and the build
-  # failed 112 minutes later on the same unresolved __std_mismatch. The cl.exe
-  # path INSIDE the file was converted; the path TO the file was not.
-  if command -v cygpath >/dev/null 2>&1; then
-    LIGHTOFFICE_BOOST_USER_CONFIG="$(cygpath -m "$_uc_posix")"
-  else
-    LIGHTOFFICE_BOOST_USER_CONFIG="$(printf '%s' "$_uc_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
-  fi
-  export LIGHTOFFICE_BOOST_USER_CONFIG
-  ok "b2 --user-config=$LIGHTOFFICE_BOOST_USER_CONFIG"
-  ok "boost will build with $_cl_jam_path"
-  sed 's/^/      /' "$_uc_posix"
-else
-  warn "no cl.exe to pin — boost may build with a different toolset than it links"
-fi
-phase_end
-
 phase_begin patch-vs-generator
 "$ROOT/scripts/patch_vs2022_generator.sh" "$SRC"
 export LIGHTOFFICE_VS_GENERATOR="${LIGHTOFFICE_VS_GENERATOR:-17 2022}"
@@ -426,40 +338,18 @@ if [ "$missing" -ne 0 ]; then
   exit 1
 fi
 
-# The boost libraries are named vc142 whatever actually compiled them, so the
-# name proves nothing. __std_mismatch_1/2 exist only in the VS 2022 era STL:
-# if they appear in a library we are about to link with v142, the toolset pin
-# did not take, and the link will fail 60 minutes from now. The symbol name is
-# a plain string in the COFF symbol table, so grep answers in a moment.
+# boost's libraries are named vc142 whatever compiled them, and since the
+# whole build now links with the default (v143) toolset that mislabelling is
+# harmless: a v143 linker accepts v142 and v143 inputs alike. Report what is
+# in the archive, but do not fail on it -- the invariant that matters is that
+# nothing is NEWER than the linker, and nothing can be.
 _bregex="$SRC/core/Common/3dParty/boost/build/win_64/lib/libboost_regex-vc142-mt-x64-1_72.lib"
 if [ -f "$_bregex" ]; then
-  # Secondary gate. The primary check now runs inside boost.py the moment b2
-  # finishes installing (see scripts/patch_boost_toolset.sh); this one only
-  # ever runs on a build that already got past linking, which is precisely why
-  # it could not report the failure it was written for.
-  #
-  # Report the evidence, not just the verdict. On the 112-minute run this
-  # check either passed or never ran and the log could not tell me which --
-  # the file is far too large to page back to. "boost" is a positive control:
-  # if it is absent too, the grep is not reading what I think it is.
   _n_mismatch=$(grep -ac "__std_mismatch" "$_bregex" || true)
-  _n_control=$(grep -ac "boost" "$_bregex" || true)
   echo "      $_bregex ($(wc -c < "$_bregex") bytes)"
-  echo "      __std_mismatch hits=$_n_mismatch   control 'boost' hits=$_n_control"
-  if [ "${_n_control:-0}" -eq 0 ]; then
-    warn "the control string is absent — this check cannot see inside the archive,"
-    warn "  so a zero __std_mismatch count proves nothing here"
-  fi
-  if grep -aq "__std_mismatch" "$_bregex"; then
-    bad "boost was compiled by a newer toolset than the one linking it"
-    echo "      $_bregex references __std_mismatch_*, which only the VS 2022" >&2
-    echo "      era STL provides, but this build links v142. The --user-config" >&2
-    echo "      pin did not take — see scripts/patch_boost_toolset.sh." >&2
-    exit 1
-  fi
-  ok "boost regex is free of VS2022-era STL symbols (toolset pin held)"
+  echo "      __std_mismatch hits=$_n_mismatch (informational: the linker is v143)"
 else
-  warn "no libboost_regex-vc142 to check at $_bregex"
+  warn "no libboost_regex-vc142 at $_bregex"
 fi
 phase_end
 

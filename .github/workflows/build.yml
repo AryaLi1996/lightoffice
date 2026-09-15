@@ -631,11 +631,22 @@ jobs:
       # preflight checked that Visual Studio was INSTALLED, which was true and
       # not the question; it never checked that the compiler was CALLABLE.
       #
-      # -vcvars_ver=14.2 selects the v142 toolset when it is present, because
-      # that is the newest boost.py has a branch for. Falling back to the
-      # default when it is absent is deliberate: it gets the build moving and
-      # the next failure then tells us whether vc143 really is a problem,
-      # rather than stopping here on a prediction.
+      # The toolset is deliberately NOT pinned to v142 any more.
+      #
+      # Six rounds tried to force boost down to v142 to match a v142 link, and
+      # the last of them proved the pin was in place and boost was still built
+      # against the newer STL. That fight is the wrong way round: Microsoft's
+      # binary-compatibility rule is that the LINKING toolset must be at least
+      # as new as everything it links, so the cheap direction is to raise the
+      # linker, not lower every input.
+      #
+      # Letting vcvarsall pick the default (v143) satisfies the rule directly.
+      # boost's objects are v143 and the linker is v143. Qt 5.15.2
+      # msvc2019_64 is v142-built and still links, because older inputs under
+      # a newer linker is exactly the supported direction. boost.py keeps
+      # naming its output vc142 -- that is only a filename, and core's .pri
+      # files look for that name, so leaving it alone avoids breaking the
+      # link by renaming what it searches for.
       #
       # Only PATH/INCLUDE/LIB/LIBPATH are exported. Dumping all of `set` into
       # GITHUB_ENV drags in multi-line and quoted values that corrupt the file.
@@ -648,15 +659,11 @@ jobs:
           vcvars="$vs\\VC\\Auxiliary\\Build\\vcvarsall.bat"
           echo "vcvarsall: $vcvars"
 
+          # No -vcvars_ver: take the default, newest toolset. See above.
           ver_arg=""
-          if ls "$vs/VC/Tools/MSVC" 2>/dev/null | grep -q '^14\.2'; then
-            ver_arg="-vcvars_ver=14.2"
-            echo "v142 toolset present — selecting it ($ver_arg)"
-          else
-            echo "::warning::windows: no v142 toolset; using the default."
-            echo "  boost.py has no branch newer than msvc-14.2, so this may be"
-            echo "  the next blocker. Letting it proceed to find out."
-          fi
+          echo "toolsets present under $vs/VC/Tools/MSVC:"
+          ls "$vs/VC/Tools/MSVC" 2>/dev/null | sed 's/^/  /' || true
+          echo "selecting the default (newest) toolset — no -vcvars_ver"
 
           # Via a batch file rather than `cmd //c "call \"$vcvars\" ..."`.
           # That form died with
@@ -742,9 +749,9 @@ jobs:
           # DetectVisualStudioPath() then returns whatever that names. Pointing
           # it at the 2022 installation makes the 2019 branch resolve to a real
           # toolchain. This is not pretending 2022 is 2019 for the compile --
-          # vcvarsall above already selected the v142 toolset, which is what
-          # both V8 and boost.py expect; it only tells a script that predates
-          # 2022 where that toolset lives.
+          # vcvarsall above selected the default toolset and that is what gets
+          # used; this only tells a script that predates 2022 where Visual
+          # Studio lives.
           #
           # DEPOT_TOOLS_WIN_TOOLCHAIN=0 is what puts it on this path at all:
           # with it unset the script assumes Google's internal toolchain
@@ -790,7 +797,6 @@ jobs:
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
           LIGHTOFFICE_VERSION: 1.0.0.0
-          LIGHTOFFICE_BOOST_DIAG: ${{ runner.temp }}/boost-diag.txt
         run: scripts/build_windows.sh --arch x64
 
       # Say plainly whether an installer appeared. The step this replaces
@@ -846,25 +852,6 @@ jobs:
           # were actually found, both times after the fact.
           [ "$state" = empty ] && exit 1
           exit 0
-
-      # LAST on purpose. GitHub echoes the job-wide env before every step --
-      # an 8KB PATH plus INCLUDE/LIB/LIBPATH, because the MSVC setup step
-      # exports them to $GITHUB_ENV -- and the logs API returns only a ~45KB
-      # tail. Diagnostics printed mid-build are therefore pushed off the front
-      # by the preamble of whatever runs after them, which is what happened on
-      # runs 34973789376, 34975933781 and 34977681520. Printing them from the
-      # final step puts them at the end, where the tail can actually reach.
-      - name: Boost toolset diagnostics
-        if: always()
-        shell: bash
-        run: |
-          f="${RUNNER_TEMP}/boost-diag.txt"
-          if [ -f "$f" ]; then
-            echo "=== boost toolset diagnostics ==="
-            cat "$f"
-          else
-            echo "(no boost diagnostics written -- the boost check did not fail)"
-          fi
 
       # Guarded rather than deleted: when the native build above starts
       # producing artifacts/, this uploads them with no further change.
