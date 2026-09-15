@@ -320,7 +320,53 @@ elif [ -n "$_cl_for_jam" ]; then
 fi
 if [ -n "${_cl_jam_path:-}" ]; then
   _uc_posix="$SRC/build_tools/lightoffice-user-config.jam"
-  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$_uc_posix"
+
+  # Pinning cl.exe is NOT enough, which is what the first three attempts got
+  # wrong. Boost.Build's msvc.jam runs a setup script before every compile and,
+  # when none is given, derives one itself (tools/build/src/tools/msvc.jam,
+  # generate-setup-cmd): for version 14.2 it joins the compiler's directory
+  # with ..\..\..\..\..\Auxiliary\Build and calls that vcvarsall.bat. It
+  # never passes -vcvars_ver, so vcvarsall selects the DEFAULT toolset -- the
+  # newest installed, v143 -- and overwrites the INCLUDE we set with
+  # -vcvars_ver=14.2.
+  #
+  # So boost was compiled by v142's cl.exe against v143's HEADERS. That is
+  # precisely how a library named vc142 ends up referencing __std_mismatch_1:
+  # the pin fixed the compiler binary and left the headers alone.
+  #
+  # <setup-amd64> is msvc.jam's documented escape hatch (its option list and
+  # the manual both describe it). When it is set, generate-setup-cmd returns it
+  # untouched and derives nothing. Point it at a script that names the toolset.
+  _vcvars_dir=""
+  if [ -n "${vs2019_install:-}" ]; then
+    _vcvars_dir="$vs2019_install\\VC\\Auxiliary\\Build"
+  else
+    # The same directory msvc.jam walks to: VC/Auxiliary/Build. Strip at the
+    # /Tools/MSVC/ segment rather than counting dirnames -- two successive
+    # attempts at counting landed one and two levels short, and a stack of
+    # six dirnames says nothing about where it means to arrive.
+    _vcvars_dir="${_cl_for_jam%/Tools/MSVC/*}/Auxiliary/Build"
+    command -v cygpath >/dev/null 2>&1 && _vcvars_dir="$(cygpath -w "$_vcvars_dir")"
+  fi
+
+  _setup_posix="$SRC/build_tools/lightoffice-vcvars142.bat"
+  {
+    printf '@echo off\r\n'
+    printf 'rem Written by scripts/build_windows.sh. b2 invokes this instead of\r\n'
+    printf 'rem deriving its own vcvarsall call, which would omit -vcvars_ver and\r\n'
+    printf 'rem so select the newest toolset (v143) headers.\r\n'
+    printf 'call "%s\\vcvarsall.bat" x64 -vcvars_ver=14.2\r\n' "$_vcvars_dir"
+  } > "$_setup_posix"
+  if command -v cygpath >/dev/null 2>&1; then
+    _setup_jam="$(cygpath -m "$_setup_posix")"
+  else
+    _setup_jam="$(printf '%s' "$_setup_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
+  fi
+
+  printf 'using msvc : 14.2 : "%s" : <setup-amd64>"%s" ;\n' \
+    "$_cl_jam_path" "$_setup_jam" > "$_uc_posix"
+  ok "boost setup script: $_setup_jam"
+  sed 's/^/      /' "$_setup_posix"
   # b2.exe is a native Windows program and cannot resolve an MSYS path. The
   # Windows job sets LIGHTOFFICE_SRC=/c/lightoffice/src, so the first version
   # of this passed --user-config=/c/lightoffice/src/... , b2 silently ignored
