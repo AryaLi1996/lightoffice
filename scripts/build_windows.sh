@@ -299,6 +299,47 @@ phase_begin patch-submake
 "$ROOT/scripts/patch_win_submake_python.sh" "$SRC"
 phase_end
 
+# b2 is told --toolset=msvc-14.2 but no compiler, so it searches the machine
+# and on a VS 2022 runner finds more than one usable configuration -- run
+# 34984273239 died on a 32/64 name clash 4m39s in, before compiling anything.
+# Naming one compiler leaves nothing to search for.
+#
+# The compiler named is whichever cl.exe the environment already selected,
+# which is now v143: the whole build links v143, so boost must compile v143.
+# The LABEL stays 14.2 because core/Common/3dParty/boost/boost.pri sets
+# vs2019:VS_VERSION=142 and links -llibboost_*-vc142-mt-x64-1_72; b2 takes the
+# filename from the toolset version it was asked for, not from the compiler.
+# Named vc142 for core to find, built by v143 to link.
+phase_begin patch-boost-toolset
+"$ROOT/scripts/patch_boost_toolset.sh" "$SRC"
+
+# Forward slashes (cygpath -m) because Boost.Build treats a backslash as an
+# escape. Not hardcoded: no assumption about the MSVC point release.
+_cl_for_jam="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
+if [ -n "$_cl_for_jam" ] && command -v cygpath >/dev/null 2>&1; then
+  _cl_jam_path="$(cygpath -m "$_cl_for_jam")"
+elif [ -n "$_cl_for_jam" ]; then
+  _cl_jam_path="$(printf '%s' "$_cl_for_jam" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
+fi
+if [ -n "${_cl_jam_path:-}" ]; then
+  _uc_posix="$SRC/build_tools/lightoffice-user-config.jam"
+  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$_uc_posix"
+  # b2.exe is a native Windows program: an MSYS path (LIGHTOFFICE_SRC is
+  # /c/lightoffice/src) is one it cannot open, and b2 ignores a user-config it
+  # cannot open rather than failing, which cost a 112-minute run once.
+  if command -v cygpath >/dev/null 2>&1; then
+    LIGHTOFFICE_BOOST_USER_CONFIG="$(cygpath -m "$_uc_posix")"
+  else
+    LIGHTOFFICE_BOOST_USER_CONFIG="$(printf '%s' "$_uc_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
+  fi
+  export LIGHTOFFICE_BOOST_USER_CONFIG
+  ok "b2 --user-config=$LIGHTOFFICE_BOOST_USER_CONFIG"
+  sed 's/^/      /' "$_uc_posix"
+else
+  warn "no cl.exe to name — b2 will search, and may find two configurations"
+fi
+phase_end
+
 phase_begin patch-vs-generator
 "$ROOT/scripts/patch_vs2022_generator.sh" "$SRC"
 export LIGHTOFFICE_VS_GENERATOR="${LIGHTOFFICE_VS_GENERATOR:-17 2022}"
