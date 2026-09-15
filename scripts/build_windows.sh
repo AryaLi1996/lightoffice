@@ -334,10 +334,58 @@ if [ -n "$_vcvars_dir" ]; then
   LIGHTOFFICE_BOOST_VCVARS="$_vcvars_dir\\vcvarsall.bat"
   export LIGHTOFFICE_BOOST_VCVARS
   ok "boost vcvarsall: $LIGHTOFFICE_BOOST_VCVARS"
+  # Same path, second name. openssl.py needs it too, for the same reason
+  # (config.option("vs-path") is a hardcoded 2019 path), but it calls vcvarsall
+  # with no -vcvars_ver, so the two are not interchangeable in meaning even
+  # though they are the same file today. Kept separate so that changing boost's
+  # toolset cannot silently change openssl's.
+  LIGHTOFFICE_VCVARS="$_vcvars_dir\\vcvarsall.bat"
+  export LIGHTOFFICE_VCVARS
+  ok "openssl vcvarsall: $LIGHTOFFICE_VCVARS"
 else
   warn "no vcvarsall found — boost will build in the ambient environment,"
   warn "  which on a v143 runner fails with a 32/64 name clash"
 fi
+
+# OpenSSL's Configure needs a NATIVE Windows perl. Git for Windows ships a
+# cygwin perl in /usr/bin and MSYS puts that first, so run 35003507607 got
+# "This perl implementation doesn't produce Windows like paths / 5.42.3 for
+# x86_64-cygwin", no makefile, and nmake U1073. Same shadowing as Git's
+# coreutils `link` beating MSVC's linker earlier in this build: the tool is
+# present, and the one that answers is the wrong one.
+_perl_win=""
+for _cand in /c/Strawberry/perl/bin /c/Perl64/bin /c/Perl/bin; do
+  if [ -x "$_cand/perl.exe" ]; then _perl_win="$_cand"; break; fi
+done
+if [ -z "$_perl_win" ]; then
+  # Walk PATH for a perl.exe that is not one of Git's.
+  _old_ifs="$IFS"; IFS=':'
+  for _d in $PATH; do
+    case "$_d" in *Git/usr/bin*|*Git/mingw64/bin*|*git/usr/bin*) continue ;; esac
+    [ -x "$_d/perl.exe" ] && { _perl_win="$_d"; break; }
+  done
+  IFS="$_old_ifs"
+fi
+if [ -n "$_perl_win" ]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    LIGHTOFFICE_PERL_DIR="$(cygpath -w "$_perl_win")"
+  else
+    LIGHTOFFICE_PERL_DIR="$_perl_win"
+  fi
+  export LIGHTOFFICE_PERL_DIR
+  ok "openssl perl dir: $LIGHTOFFICE_PERL_DIR"
+else
+  warn "no native Windows perl found — openssl's Configure will get the cygwin"
+  warn "  perl from Git for Windows and emit no makefile"
+fi
+phase_end
+
+# openssl builds with its own vcvarsall call too, and config.option("vs-path")
+# is the same hardcoded 2019 path. It also ran with is_no_errors, so run
+# 34991067915 spent 94 minutes before the missing headers surfaced as a
+# C1083 in doctrenderer's hash.cpp. Both are fixed here.
+phase_begin patch-openssl-vcvars
+"$ROOT/scripts/patch_openssl_vcvars.sh" "$SRC"
 phase_end
 
 phase_begin patch-vs-generator
