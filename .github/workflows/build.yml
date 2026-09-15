@@ -780,6 +780,18 @@ jobs:
           scripts/bootstrap.sh
           scripts/apply_overlay.sh
 
+      # Right after bootstrap, because it reads common.iss from the tree, and
+      # long before packaging, which is where a missing one would otherwise
+      # surface. Run 35006043988 compiled everything -- core, doctrenderer,
+      # every DLL -- and then died at 149 minutes because Inno Setup ships no
+      # Greek.isl. Fetching them costs about fifteen seconds here.
+      - name: Install the Inno Setup languages common.iss requires
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: scripts/install_inno_languages.sh
+
       # Preflight separately, as on macOS: a missing prerequisite that surfaces
       # two hours into a build costs a whole runner for an answer that was
       # available in seconds.
