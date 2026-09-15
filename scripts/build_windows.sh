@@ -299,65 +299,44 @@ phase_begin patch-submake
 "$ROOT/scripts/patch_win_submake_python.sh" "$SRC"
 phase_end
 
-# b2 is told --toolset=msvc-14.2 but no compiler, so it searches the machine
-# and on a VS 2022 runner finds more than one usable configuration -- run
-# 34984273239 died on a 32/64 name clash 4m39s in, before compiling anything.
-# Naming one compiler leaves nothing to search for.
+# boost gets a v142 environment of its own. b2 cannot load the boost project
+# under v143 -- it ends up with both address models and dies on a 32/64 name
+# clash before compiling anything (runs 34984273239, 34986042357, 34987757885,
+# all three with different user-configs and the same failure). Under v142 it
+# has built cleanly every time.
 #
-# The compiler named is whichever cl.exe the environment already selected,
-# which is now v143: the whole build links v143, so boost must compile v143.
-# The LABEL stays 14.2 because core/Common/3dParty/boost/boost.pri sets
-# vs2019:VS_VERSION=142 and links -llibboost_*-vc142-mt-x64-1_72; b2 takes the
-# filename from the toolset version it was asked for, not from the compiler.
-# Named vc142 for core to find, built by v143 to link.
+# Everything else stays on v143, so the link that consumes these libraries is
+# the newer toolset: older objects, newer linker, which is the direction
+# Microsoft's rule allows and the reason __std_mismatch no longer bites.
 phase_begin patch-boost-toolset
 "$ROOT/scripts/patch_boost_toolset.sh" "$SRC"
 
-# The compiler named here is the v142 one, NOT the ambient v143 compiler,
-# and the label 14.2 is therefore the truth.
-#
-# Naming the v143 cl.exe under the label 14.2 does not work: run 34986042357
-# reproduced the 32/64 name clash exactly, because msvc.jam checks the
-# compiler it was handed, finds 14.44 where 14.2 was claimed, and ends up
-# configuring both. Version and label have to agree.
-#
-# That is fine, and is the point of linking with v143. boost compiles v142
-# objects; the linker is v143; Microsoft's rule only forbids the reverse. This
-# is also the exact configuration boost built cleanly under for six runs -- the
-# libraries it produced were always linkable, just not by a v142 linker.
-_cl_ambient="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
-_cl_for_jam="$_cl_ambient"
-if [ -n "$_cl_ambient" ]; then
-  _vs_root="${_cl_ambient%/VC/Tools/MSVC/*}"
-  _v142_dir="$(ls -d "$_vs_root"/VC/Tools/MSVC/14.2* 2>/dev/null | head -1 || true)"
-  if [ -n "$_v142_dir" ] && [ -x "$_v142_dir/bin/HostX64/x64/cl.exe" ]; then
-    _cl_for_jam="$_v142_dir/bin/HostX64/x64/cl.exe"
-    ok "boost will compile with v142: $_cl_for_jam"
-  else
-    warn "no v142 toolset found — naming the ambient compiler, which may clash"
-  fi
-fi
-if [ -n "$_cl_for_jam" ] && command -v cygpath >/dev/null 2>&1; then
-  _cl_jam_path="$(cygpath -m "$_cl_for_jam")"
-elif [ -n "$_cl_for_jam" ]; then
-  _cl_jam_path="$(printf '%s' "$_cl_for_jam" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
-fi
-if [ -n "${_cl_jam_path:-}" ]; then
-  _uc_posix="$SRC/build_tools/lightoffice-user-config.jam"
-  printf 'using msvc : 14.2 : "%s" ;\n' "$_cl_jam_path" > "$_uc_posix"
-  # b2.exe is a native Windows program: an MSYS path (LIGHTOFFICE_SRC is
-  # /c/lightoffice/src) is one it cannot open, and b2 ignores a user-config it
-  # cannot open rather than failing, which cost a 112-minute run once.
-  if command -v cygpath >/dev/null 2>&1; then
-    LIGHTOFFICE_BOOST_USER_CONFIG="$(cygpath -m "$_uc_posix")"
-  else
-    LIGHTOFFICE_BOOST_USER_CONFIG="$(printf '%s' "$_uc_posix" | sed 's|^/\([A-Za-z]\)/|\U\1:/|')"
-  fi
-  export LIGHTOFFICE_BOOST_USER_CONFIG
-  ok "b2 --user-config=$LIGHTOFFICE_BOOST_USER_CONFIG"
-  sed 's/^/      /' "$_uc_posix"
+# Not from config.option("vs-path"): build_tools/scripts/config.py only fills
+# that in with hardcoded "Microsoft Visual Studio/2019/..." paths, which do not
+# exist on a VS 2022 runner. Derive it the same way msvc.jam would -- from the
+# compiler's own location -- with vs2019_install (set by build.yml, and despite
+# the name it points at the 2022 install) preferred when present.
+_vcvars_dir=""
+if [ -n "${vs2019_install:-}" ]; then
+  _vcvars_dir="$vs2019_install\\VC\\Auxiliary\\Build"
 else
-  warn "no cl.exe to name — b2 will search, and may find two configurations"
+  _cl_amb="$(command -v cl.exe 2>/dev/null || command -v cl || true)"
+  if [ -n "$_cl_amb" ]; then
+    _vcvars_posix="${_cl_amb%/Tools/MSVC/*}/Auxiliary/Build"
+    if command -v cygpath >/dev/null 2>&1; then
+      _vcvars_dir="$(cygpath -w "$_vcvars_posix")"
+    else
+      _vcvars_dir="$_vcvars_posix"
+    fi
+  fi
+fi
+if [ -n "$_vcvars_dir" ]; then
+  LIGHTOFFICE_BOOST_VCVARS="$_vcvars_dir\\vcvarsall.bat"
+  export LIGHTOFFICE_BOOST_VCVARS
+  ok "boost vcvarsall: $LIGHTOFFICE_BOOST_VCVARS"
+else
+  warn "no vcvarsall found — boost will build in the ambient environment,"
+  warn "  which on a v143 runner fails with a 32/64 name clash"
 fi
 phase_end
 
