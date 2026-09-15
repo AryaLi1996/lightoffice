@@ -51,6 +51,21 @@
 # shape and the same latent problem, but this project builds neither, and a
 # patch that has never run is a patch that is wrong without anyone noticing.
 #
+# WHY THE CHECK LIVES HERE AND NOT AFTER THE BUILD
+#
+# The first two attempts at this fix both failed, and neither said so until
+# the link step ~70 minutes later:
+#
+#   34744587536  112m08s  the jam path was an MSYS path b2 could not open
+#   34758394050   93m17s  same LNK2019; the post-build check never ran at all,
+#                         because the failure it was meant to diagnose aborted
+#                         the build before reaching it
+#
+# So the check runs immediately after b2 installs, where boost is actually
+# built (~20 minutes in), and --debug-configuration records which compiler b2
+# resolved the toolset to. A check that only executes when the build succeeds
+# cannot report the failure it exists for.
+#
 # Idempotent: marker-fenced, re-running finds nothing to do.
 #
 # Usage: scripts/patch_boost_toolset.sh [/path/to/onlyoffice-src]
@@ -94,9 +109,86 @@ new = (f'      # {mark}: --toolset names a toolset but pins no compiler path, so
        '      # scripts/patch_boost_toolset.sh.\n'
        '      _uc = os.environ.get("LIGHTOFFICE_BOOST_USER_CONFIG", "")\n'
        '      _uc_arg = ["--user-config=" + _uc] if _uc else []\n'
+       '      print("[lightoffice] boost user-config: " + (_uc or "<none>"))\n'
+       '      if _uc and os.path.isfile(_uc):\n'
+       '        print("[lightoffice] " + open(_uc).read().strip())\n'
+       '      elif _uc:\n'
+       '        print("[lightoffice] WARNING: b2 cannot open that path -- it will be ignored")\n'
+       '      # --debug-configuration makes b2 name the compiler each toolset\n'
+       '      # actually resolved to. Without it the only evidence that it picked\n'
+       '      # the wrong one arrives 70 minutes later as an unresolved symbol.\n'
        '      base.cmd("b2.exe", ["--prefix=./../build/win_64", "link=static", '
        '"--with-filesystem", "--with-system", "--with-date_time", "--with-regex", '
-       '"--toolset=" + win_toolset] + _uc_arg + ["address-model=64", "install"])\n')
+       '"--toolset=" + win_toolset] + _uc_arg + '
+       '["--debug-configuration", "address-model=64", "install"])\n'
+       '      # Check the toolset HERE, where boost is built, not after the whole\n'
+       '      # build. The mismatch surfaces as an LNK2019 about 70 minutes later,\n'
+       '      # and because that failure aborts the build the old post-build check\n'
+       '      # never ran at all -- it only ever executed when there was nothing\n'
+       '      # wrong to report.\n'
+       '      _lo_lib = "./../build/win_64/lib/libboost_regex-" + win_vs_version + '
+       '"-mt-x64-1_72.lib"\n'
+       '      if not base.is_file(_lo_lib):\n'
+       '        print("[lightoffice] WARNING: no " + _lo_lib + " to check")\n'
+       '      else:\n'
+       '        _blob = open(_lo_lib, "rb").read()\n'
+       '        _hits = _blob.count(b"__std_mismatch")\n'
+       '        _ctl = _blob.count(b"boost")\n'
+       '        print("[lightoffice] %s: %d bytes, __std_mismatch=%d, control=%d"\n'
+       '              % (_lo_lib, len(_blob), _hits, _ctl))\n'
+       '        # Release objects turned out NOT to carry a toolset path (run\n'
+       '        # 34975933781 reported none), so this is kept only for the case\n'
+       '        # where one is present -- it is not the evidence it was meant to\n'
+       '        # be, and it says so rather than staying silent.\n'
+       '        import re as _re\n'
+       '        _vers = sorted(set(_re.findall(rb"14\\.\\d\\d\\.\\d{5}", _blob)))\n'
+       '        for _v in _vers:\n'
+       '          print("[lightoffice]   toolset stamp in archive: %s (x%d)"\n'
+       '                % (_v.decode(), _blob.count(_v)))\n'
+       '        if not _vers:\n'
+       '          print("[lightoffice]   no toolset stamp found in the archive")\n'
+       '        if 0 == _ctl:\n'
+       '          print("[lightoffice] WARNING: the control string is absent, so this")\n'
+       '          print("[lightoffice]   check cannot see inside the archive and a")\n'
+       '          print("[lightoffice]   zero __std_mismatch count proves nothing")\n'
+       '        elif 0 != _hits:\n'
+       '          # Re-print the configuration AT THE FAILURE. It was already\n'
+       '          # printed before the b2 call, but b2 emits ~15000 target lines\n'
+       '          # in between and only the tail of a CI log can be fetched, so\n'
+       '          # three rounds running the decisive evidence existed and could\n'
+       '          # not be read. Diagnostics belong where the failure is.\n'
+       '          print("[lightoffice] --- configuration as the build actually saw it ---")\n'
+       '          print("[lightoffice] user-config path: " + (_uc or "<none>"))\n'
+       '          if _uc:\n'
+       '            print("[lightoffice] user-config exists: %s" % os.path.isfile(_uc))\n'
+       '            if os.path.isfile(_uc):\n'
+       '              _txt = open(_uc).read().strip()\n'
+       '              print("[lightoffice] user-config: " + _txt)\n'
+       '              # Pull the setup script out of the jam and show it too: if\n'
+       '              # b2 read the jam but could not open the script it names,\n'
+       '              # it falls back to deriving its own vcvarsall silently.\n'
+       '              import re as _re2\n'
+       '              _m = _re2.search(r"<setup-amd64>\\\"([^\\\"]+)\\\"", _txt)\n'
+       '              if _m:\n'
+       '                _sp = _m.group(1)\n'
+       '                print("[lightoffice] setup script: " + _sp)\n'
+       '                print("[lightoffice] setup script exists: %s" % os.path.isfile(_sp))\n'
+       '                if os.path.isfile(_sp):\n'
+       '                  for _ln in open(_sp).read().splitlines():\n'
+       '                    print("[lightoffice]   | " + _ln)\n'
+       '              else:\n'
+       '                print("[lightoffice] no <setup-amd64> in the jam")\n'
+       '          print("[lightoffice] INCLUDE as this process sees it:")\n'
+       '          for _d in os.environ.get("INCLUDE", "").split(";"):\n'
+       '            if _d:\n'
+       '              print("[lightoffice]   " + _d)\n'
+       '          print("[lightoffice] ----------------------------------------------")\n'
+       '          sys.exit("[lightoffice] boost was compiled against a newer STL than "\n'
+       '                   "the one linking it: " + _lo_lib + " references "\n'
+       '                   "__std_mismatch_*, which only the VS 2022 era STL "\n'
+       '                   "provides, while this build links v142.")\n'
+       '        else:\n'
+       '          print("[lightoffice] boost matches the linking toolset")\n')
 
 if s.count(old) != 1:
     sys.exit(f"win_64 b2 call: found {s.count(old)} matches, expected 1")
