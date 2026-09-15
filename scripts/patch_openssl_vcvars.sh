@@ -30,6 +30,20 @@
 # 2. is_no_errors goes away for win_64, so a failing openssl stops the build
 #    where it breaks instead of eighty minutes later in an unrelated file.
 #
+# UPDATE, run 35003507607: (1) was NOT the cause, exactly as the caveat below
+# allowed. With a correct vcvarsall the batch got further and named the real
+# problem -- OpenSSL's Configure ran under Git for Windows' cygwin perl:
+#
+#   This perl implementation doesn't produce Windows like paths
+#   This Perl version: 5.42.3 for x86_64-cygwin-thread-multi
+#   NMAKE : fatal error U1073: don't know how to make 'clean'
+#
+# Configure refuses to emit a Windows makefile under a cygwin perl, so nmake
+# had no targets. Strawberry Perl is installed, but MSYS puts Git's /usr/bin
+# ahead of C:\Strawberry\perl\bin -- the same shadowing that made Git's
+# coreutils `link` win over MSVC's linker earlier in this build. So the batch
+# now prepends LIGHTOFFICE_PERL_DIR before Configure runs.
+#
 # Whether (1) is the actual cause is NOT established. The ambient environment
 # is already correct by the time make.py runs -- build.yml's MSVC setup step
 # exports PATH/INCLUDE/LIB/LIBPATH -- so a `call` to a path that does not exist
@@ -90,6 +104,17 @@ new_call = (f'      # {mark}: config.option("vs-path") is filled in by\n'
             '        _vcv = config.option("vs-path") + "/vcvarsall.bat"\n'
             '      print("[lightoffice] openssl vcvarsall: " + _vcv)\n'
             '      qmake_bat.append("call " + chr(34) + _vcv + chr(34) + " x64")\n'
+            '      # OpenSSL Configure must run under a NATIVE Windows perl. Git for\n'
+            '      # Windows ships a cygwin perl in /usr/bin and MSYS puts that\n'
+            '      # directory ahead of C:\\\\Strawberry\\\\perl\\\\bin, so Configure got\n'
+            '      # 5.42.3 for x86_64-cygwin, said "This perl implementation does not\n'
+            '      # produce Windows like paths", emitted no makefile, and nmake then\n'
+            '      # failed with U1073: do not know how to make clean / build_libs.\n'
+            '      _perl = os.environ.get("LIGHTOFFICE_PERL_DIR", "")\n'
+            '      if _perl:\n'
+            '        print("[lightoffice] openssl perl dir: " + _perl)\n'
+            '        qmake_bat.append("set " + chr(34) + "PATH=" + _perl + ";%PATH%" + chr(34))\n'
+            '        qmake_bat.append("perl -V:archname")\n'
             '      qmake_bat.append("perl Configure VC-WIN64A --prefix=" + '
             'old_cur_dir + "\\\\build\\\\win_64 --openssldir=" + old_cur_dir + '
             '"\\\\build\\\\win_64 no-shared no-asm enable-md2")\n')

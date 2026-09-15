@@ -346,6 +346,38 @@ else
   warn "no vcvarsall found — boost will build in the ambient environment,"
   warn "  which on a v143 runner fails with a 32/64 name clash"
 fi
+
+# OpenSSL's Configure needs a NATIVE Windows perl. Git for Windows ships a
+# cygwin perl in /usr/bin and MSYS puts that first, so run 35003507607 got
+# "This perl implementation doesn't produce Windows like paths / 5.42.3 for
+# x86_64-cygwin", no makefile, and nmake U1073. Same shadowing as Git's
+# coreutils `link` beating MSVC's linker earlier in this build: the tool is
+# present, and the one that answers is the wrong one.
+_perl_win=""
+for _cand in /c/Strawberry/perl/bin /c/Perl64/bin /c/Perl/bin; do
+  if [ -x "$_cand/perl.exe" ]; then _perl_win="$_cand"; break; fi
+done
+if [ -z "$_perl_win" ]; then
+  # Walk PATH for a perl.exe that is not one of Git's.
+  _old_ifs="$IFS"; IFS=':'
+  for _d in $PATH; do
+    case "$_d" in *Git/usr/bin*|*Git/mingw64/bin*|*git/usr/bin*) continue ;; esac
+    [ -x "$_d/perl.exe" ] && { _perl_win="$_d"; break; }
+  done
+  IFS="$_old_ifs"
+fi
+if [ -n "$_perl_win" ]; then
+  if command -v cygpath >/dev/null 2>&1; then
+    LIGHTOFFICE_PERL_DIR="$(cygpath -w "$_perl_win")"
+  else
+    LIGHTOFFICE_PERL_DIR="$_perl_win"
+  fi
+  export LIGHTOFFICE_PERL_DIR
+  ok "openssl perl dir: $LIGHTOFFICE_PERL_DIR"
+else
+  warn "no native Windows perl found — openssl's Configure will get the cygwin"
+  warn "  perl from Git for Windows and emit no makefile"
+fi
 phase_end
 
 # openssl builds with its own vcvarsall call too, and config.option("vs-path")
