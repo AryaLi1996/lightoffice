@@ -790,6 +790,7 @@ jobs:
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
           LIGHTOFFICE_VERSION: 1.0.0.0
+          LIGHTOFFICE_BOOST_DIAG: ${{ runner.temp }}/boost-diag.txt
         run: scripts/build_windows.sh --arch x64
 
       # Say plainly whether an installer appeared. The step this replaces
@@ -845,6 +846,25 @@ jobs:
           # were actually found, both times after the fact.
           [ "$state" = empty ] && exit 1
           exit 0
+
+      # LAST on purpose. GitHub echoes the job-wide env before every step --
+      # an 8KB PATH plus INCLUDE/LIB/LIBPATH, because the MSVC setup step
+      # exports them to $GITHUB_ENV -- and the logs API returns only a ~45KB
+      # tail. Diagnostics printed mid-build are therefore pushed off the front
+      # by the preamble of whatever runs after them, which is what happened on
+      # runs 34973789376, 34975933781 and 34977681520. Printing them from the
+      # final step puts them at the end, where the tail can actually reach.
+      - name: Boost toolset diagnostics
+        if: always()
+        shell: bash
+        run: |
+          f="${RUNNER_TEMP}/boost-diag.txt"
+          if [ -f "$f" ]; then
+            echo "=== boost toolset diagnostics ==="
+            cat "$f"
+          else
+            echo "(no boost diagnostics written -- the boost check did not fail)"
+          fi
 
       # Guarded rather than deleted: when the native build above starts
       # producing artifacts/, this uploads them with no further change.
