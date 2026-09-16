@@ -805,6 +805,14 @@ jobs:
       - name: Build Windows (x64)
         if: steps.deps.outputs.qt == 'ok'
         continue-on-error: true
+        # Under the job's own 360 minute cap, so the report step still runs.
+        # Run 35082531652 hit the job cap at exactly 360 minutes: the step was
+        # cancelled, the report step was SKIPPED, and the build log tail added
+        # for precisely this purpose was never printed -- six hours of runner
+        # for no information at all. A GitHub-hosted job cannot be given more
+        # than 360 minutes, so the only way to learn anything from a build that
+        # does not fit is to stop it early enough to be asked where it got to.
+        timeout-minutes: 300
         shell: bash
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
