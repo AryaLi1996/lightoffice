@@ -40,21 +40,68 @@ bad()  { printf '  \033[31m✗\033[0m %s\n' "$*" >&2; }
 ISS="$SRC/desktop-apps/package/inno/common.iss"
 [ -f "$ISS" ] || { warn "no $ISS — nothing to do"; exit 0; }
 
-# Locate Inno Setup. iscc.exe on PATH wins; otherwise the default location.
-INNO_DIR=""
-if command -v iscc >/dev/null 2>&1; then
-  INNO_DIR="$(dirname "$(command -v iscc)")"
-elif command -v iscc.exe >/dev/null 2>&1; then
-  INNO_DIR="$(dirname "$(command -v iscc.exe)")"
-elif [ -d "/c/Program Files (x86)/Inno Setup 6" ]; then
-  INNO_DIR="/c/Program Files (x86)/Inno Setup 6"
-elif [ -d "/c/Program Files/Inno Setup 6" ]; then
-  INNO_DIR="/c/Program Files/Inno Setup 6"
+# Locate Inno Setup -- every copy of it, not the first thing called iscc.
+#
+# THE SECOND FAILURE (run 35022661292): this step passed in seventeen seconds
+# reporting "all 40 referenced language files are present", and the build died
+# 174 minutes later on the very same missing Greek.isl. The files were real;
+# the directory was not the one ISCC reads.
+#
+# `choco install innosetup` drops a SHIM at C:\ProgramData\chocolatey\bin\iscc.exe
+# and that is what is on PATH -- the job's PATH has no "Inno Setup 6" entry at
+# all. So `command -v iscc` resolved the shim, and the forty language files
+# landed in C:\ProgramData\chocolatey\bin\Languages. Meanwhile make_inno.ps1
+# resolves the real installation from $env:INNOPATH or the registry key
+# HKLM\...\Uninstall\Inno Setup 6_is1 -> "Inno Setup: App Path", prepends THAT
+# to PATH, and runs iscc from there.
+#
+# This is the same shape as the Git-for-Windows shadowing that cost this build
+# link.exe, perl and more: the tool is present, and the one that answers is the
+# wrong one. So: collect candidates, keep only directories that actually hold
+# ISCC.exe (a shim directory does not), and populate all of them.
+candidates=""
+[ -n "${INNOPATH:-}" ] && candidates="$candidates
+$(command -v cygpath >/dev/null 2>&1 && cygpath -u "$INNOPATH" 2>/dev/null || echo "$INNOPATH")"
+
+# The registry value make_inno.ps1 itself uses. reg.exe prints
+#   "    Inno Setup: App Path    REG_SZ    C:\Program Files (x86)\Inno Setup 6"
+if command -v reg >/dev/null 2>&1 || [ -x /c/Windows/System32/reg.exe ]; then
+  _reg="$(command -v reg 2>/dev/null || echo /c/Windows/System32/reg.exe)"
+  for _key in \
+    'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1' \
+    'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1'; do
+    _val="$("$_reg" query "$_key" /v "Inno Setup: App Path" 2>/dev/null \
+            | sed -n 's/.*REG_SZ[[:space:]]*//p' | tr -d '\r')"
+    [ -n "$_val" ] || continue
+    candidates="$candidates
+$(command -v cygpath >/dev/null 2>&1 && cygpath -u "$_val" 2>/dev/null || echo "$_val")"
+  done
 fi
-[ -n "$INNO_DIR" ] || { bad "Inno Setup not found — cannot install language files"; exit 1; }
-LANG_DIR="$INNO_DIR/Languages"
-mkdir -p "$LANG_DIR"
-ok "Inno Setup: $INNO_DIR"
+
+candidates="$candidates
+/c/Program Files (x86)/Inno Setup 6
+/c/Program Files/Inno Setup 6"
+
+# Keep the real installations: a directory holding ISCC.exe. The chocolatey
+# shim directory does not, which is exactly how it is rejected here.
+INNO_DIRS=""
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  [ -e "$d/ISCC.exe" ] || [ -e "$d/iscc.exe" ] || continue
+  case "
+$INNO_DIRS" in *"
+$d
+"*) continue ;; esac
+  INNO_DIRS="$INNO_DIRS$d
+"
+done <<EOF
+$candidates
+EOF
+
+[ -n "$INNO_DIRS" ] || { bad "no directory containing ISCC.exe found — cannot install language files"; exit 1; }
+while IFS= read -r d; do [ -n "$d" ] && ok "Inno Setup: $d"; done <<EOF
+$INNO_DIRS
+EOF
 
 # Which .isl files does common.iss actually reference?
 #
@@ -77,10 +124,28 @@ printf '  %s referenced\n' "$(printf '%s\n' "$needed" | wc -l | tr -d ' ')"
 # Two directories, and they are complementary rather than one being a superset:
 # Greek and Vietnamese are only in Unofficial/, while Korean, ChineseSimplified
 # and Swedish are only in Languages/. Checked by asking for each, not assumed.
+#
+# Downloaded once into a staging directory and then copied into every Inno
+# Setup installation found, so it does not matter which one make_inno.ps1
+# resolves from the registry.
 ISSRC="https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages"
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+
+have_everywhere() {
+  _f="$1"
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -s "$d/Languages/$_f" ] || return 1
+  done <<EOF
+$INNO_DIRS
+EOF
+  return 0
+}
+
 fetched=0
 for f in $needed; do
-  if [ -s "$LANG_DIR/$f" ]; then continue; fi
+  have_everywhere "$f" && continue
   got=""
   for url in "$ISSRC/Unofficial/$f" "$ISSRC/$f"; do
     # -f so a 404 fails instead of writing "404: Not Found" into a .isl, and
@@ -91,29 +156,66 @@ for f in $needed; do
     # here. Adding --retry-all-errors made every official language retry its
     # expected 404 on the Unofficial URL five times over, turning a ninety
     # second step into a five minute one -- caught by timing it, not reading it.
-    if curl -fsSL --retry 5 --retry-delay 2 --max-time 60 -o "$LANG_DIR/$f" "$url" 2>/dev/null; then
+    if curl -fsSL --retry 5 --retry-delay 2 --max-time 60 -o "$STAGE/$f" "$url" 2>/dev/null; then
       got="$url"; break
     fi
-    rm -f "$LANG_DIR/$f"
+    rm -f "$STAGE/$f"
   done
-  if [ -n "$got" ]; then
-    ok "fetched $f"
-    fetched=$((fetched + 1))
-  else
+  if [ -z "$got" ]; then
     warn "could not fetch $f from either issrc languages directory"
+    continue
   fi
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    [ -s "$d/Languages/$f" ] && continue
+    mkdir -p "$d/Languages"
+    cp "$STAGE/$f" "$d/Languages/$f" || warn "could not write $d/Languages/$f"
+  done <<EOF
+$INNO_DIRS
+EOF
+  ok "installed $f"
+  fetched=$((fetched + 1))
 done
 [ "$fetched" -eq 0 ] && ok "nothing to fetch — all present already"
 
-# Prove it, rather than assume the downloads covered everything.
-missing=""
-for f in $needed; do
-  if [ ! -s "$LANG_DIR/$f" ]; then missing="$missing $f"; fi
-done
-if [ -n "$missing" ]; then
-  bad "Inno Setup is missing language files common.iss requires:$missing"
+# Prove it, rather than assume the downloads covered everything. Checked in
+# every installation directory, because the one ISCC uses is chosen later by
+# make_inno.ps1 from the registry, not here.
+rc=0
+while IFS= read -r d; do
+  [ -n "$d" ] || continue
+  missing=""
+  for f in $needed; do
+    [ -s "$d/Languages/$f" ] || missing="$missing $f"
+  done
+  if [ -n "$missing" ]; then
+    bad "$d is missing language files common.iss requires:$missing"
+    rc=1
+  else
+    ok "$d/Languages: all $(printf '%s\n' "$needed" | wc -l | tr -d ' ') referenced language files present"
+  fi
+done <<EOF
+$INNO_DIRS
+EOF
+if [ "$rc" -ne 0 ]; then
   echo "      Packaging is the last step of a ~150 minute build, so this would" >&2
   echo "      otherwise surface as 'Couldn't open include file' at the very end." >&2
   exit 1
 fi
-ok "all $(printf '%s\n' "$needed" | wc -l | tr -d ' ') referenced language files are present"
+
+# Say where the files went somewhere that survives the log. A GitHub Actions
+# job log is served as a ~45KB tail and the Windows MSVC env echo alone is
+# ~40KB per step, so this step's own output is unreadable after the fact --
+# which is how the chocolatey shim went unnoticed for a 174 minute build. The
+# step summary is not truncated.
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  {
+    echo "### Inno Setup language files"
+    echo
+    while IFS= read -r d; do
+      [ -n "$d" ] && echo "- \`$d/Languages\` — $(printf '%s\n' "$needed" | wc -l | tr -d ' ') files"
+    done <<INNOEOF
+$INNO_DIRS
+INNOEOF
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
