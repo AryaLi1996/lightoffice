@@ -224,9 +224,19 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "### Inno Setup language files"
     echo
     while IFS= read -r d; do
-      [ -n "$d" ] && echo "- \`$d/Languages\` — $(printf '%s\n' "$needed" | wc -l | tr -d ' ') files"
+      if [ -n "$d" ]; then
+        echo "- \`$d/Languages\` — $(printf '%s\n' "$needed" | wc -l | tr -d ' ') files"
+      fi
     done <<INNOEOF
 $INNO_DIRS
 INNOEOF
   } >> "$GITHUB_STEP_SUMMARY"
 fi
+
+# Explicit, because everything above it is a compound command whose status is
+# whatever its last iteration happened to return. Run 35038873452 resolved the
+# right directory and installed all forty files, then exited 1 on the summary
+# block's final empty line: "[ -n "$d" ] && echo" is false on it, and that
+# status propagates out of the loop, the group, the if, and the script. The
+# work is done by here; say so.
+exit 0
