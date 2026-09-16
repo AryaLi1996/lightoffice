@@ -70,8 +70,16 @@ if command -v reg >/dev/null 2>&1 || [ -x /c/Windows/System32/reg.exe ]; then
   for _key in \
     'HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1' \
     'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Inno Setup 6_is1'; do
+    # `|| true` is load-bearing: a key that is absent makes reg exit nonzero,
+    # pipefail carries that through the pipeline, and under set -e a failing
+    # command substitution takes the whole script down -- silently, since reg's
+    # own message is on the stderr dropped above. That is precisely what
+    # happened on run 35038336734: this step died in two seconds having printed
+    # nothing at all, because the second candidate key (the non-WOW6432Node
+    # view) does not exist on the runner. A missing key is the normal case for
+    # one of the two views, not an error.
     _val="$("$_reg" query "$_key" /v "Inno Setup: App Path" 2>/dev/null \
-            | sed -n 's/.*REG_SZ[[:space:]]*//p' | tr -d '\r')"
+            | sed -n 's/.*REG_SZ[[:space:]]*//p' | tr -d '\r')" || true
     [ -n "$_val" ] || continue
     candidates="$candidates
 $(command -v cygpath >/dev/null 2>&1 && cygpath -u "$_val" 2>/dev/null || echo "$_val")"
@@ -115,7 +123,10 @@ EOF
 needed="$(grep -E '^[[:space:]]*Name:' "$ISS" \
           | grep -oE 'Languages\\[A-Za-z]+\.islu?' \
           | grep -vE '\.islu$' \
-          | sed 's#.*\\##' | sort -u)"
+          | sed 's#.*\\##' | sort -u)" || true   # same set -e + pipefail trap as above:
+                                     # a grep that matches nothing exits 1, and
+                                     # "no languages referenced" is handled on
+                                     # the next line, not by dying silently.
 [ -n "$needed" ] || { warn "common.iss references no Languages\\*.isl — nothing to install"; exit 0; }
 printf '  %s referenced\n' "$(printf '%s\n' "$needed" | wc -l | tr -d ' ')"
 
