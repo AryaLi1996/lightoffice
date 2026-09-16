@@ -809,7 +809,13 @@ jobs:
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
           LIGHTOFFICE_VERSION: 1.0.0.0
-        run: scripts/build_windows.sh --arch x64
+        # Tee'd so the report step can show where it stopped. A job log is
+        # served as a ~45KB tail and this job's env echo alone is ~40KB per
+        # step, so by the time the report step has printed its header the
+        # build step's own output is long gone -- run 35066117056 said "no
+        # installer produced" and the reason was unreachable. pipefail is on
+        # (the shell is `bash -e -o pipefail`), so tee does not mask the exit.
+        run: scripts/build_windows.sh --arch x64 2>&1 | tee "$RUNNER_TEMP/windows-build.log"
 
       # Say plainly whether an installer appeared. The step this replaces
       # reported SUCCESS while producing nothing, which is the failure mode
@@ -849,8 +855,11 @@ jobs:
                 echo "::warning::windows: skipped, no Qt on this runner"
                 ;;
               empty)
-                echo "**No installer produced.** Read the build step's log for the"
-                echo "phase that stopped."
+                echo "**No installer produced.** The last of the build step:"
+                echo
+                echo '```'
+                tail -40 "$RUNNER_TEMP/windows-build.log" 2>/dev/null || echo "(no build log)"
+                echo '```'
                 echo "::error::windows: build produced no installer"
                 ;;
             esac
