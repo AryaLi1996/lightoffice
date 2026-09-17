@@ -111,22 +111,48 @@ while IFS= read -r d; do [ -n "$d" ] && ok "Inno Setup: $d"; done <<EOF
 $INNO_DIRS
 EOF
 
-# Which .isl files does common.iss actually reference?
+# Which language files does common.iss actually reference?
 #
-# Only lines that are live: a leading ';' comments a language out. The .islu
-# variants sit inside "#if Int(DecodeVer(PREPROCVER,1)) < 6", so they belong
-# to Inno Setup 5 and are skipped -- this is 6.
-# Two steps on purpose. A single regex cannot span the ';' that separates
-# "Name: bg" from "MessagesFile:", and matching '\.isl' alone also matches the
-# '.isl' prefix of '.islu' -- both caught by testing the parse against the real
-# common.iss rather than reading it.
-needed="$(grep -E '^[[:space:]]*Name:' "$ISS" \
-          | grep -oE 'Languages\\[A-Za-z]+\.islu?' \
-          | grep -vE '\.islu$' \
-          | sed 's#.*\\##' | sort -u)" || true   # same set -e + pipefail trap as above:
-                                     # a grep that matches nothing exits 1, and
-                                     # "no languages referenced" is handled on
-                                     # the next line, not by dying silently.
+# Not a grep. Run 35181225064 built for 150 minutes and then died on
+#
+#   Error on line 168 ... Couldn't open include file
+#     "C:\\Program Files (x86)\\Inno Setup 6\\Languages\\Sinhala.islu"
+#
+# because the first version of this dropped every .islu on the theory that they
+# are all Inno Setup 5 files. Two of them are -- Vietnamese and Armenian, inside
+# "#if Int(DecodeVer(PREPROCVER,1)) < 6", which is false here and takes the
+# #else branch's .isl instead. Sinhala's is not: line 168 is unconditional and
+# ISCC 6 reads it like any other. The extension does not say which; the
+# preprocessor state does, so track it.
+#
+# Nesting is tracked properly rather than assumed flat, and for any #if this
+# cannot evaluate, BOTH branches are collected: fetching a file that turns out
+# unused costs a few seconds, and missing one costs the whole build at its last
+# step. Only the then-branch of a PREPROCVER < 6 test is treated as dead.
+needed="$(awk '
+  # depth of the conditional stack; dead[d] = 1 when this branch is not compiled
+  BEGIN { d = 0; dead[0] = 0 }
+  /^[[:space:]]*#if/ {
+    d++
+    # "#if Int(DecodeVer(PREPROCVER,1)) < 6" -- Inno Setup 5 only, so the
+    # then-branch is dead for us. Any other condition: keep both branches.
+    if ($0 ~ /PREPROCVER/ && $0 ~ /<[[:space:]]*6/) { self[d] = 1; dead[d] = 1 }
+    else { self[d] = 0; dead[d] = 0 }
+    next
+  }
+  /^[[:space:]]*#else/  { if (d > 0 && self[d]) dead[d] = !dead[d]; next }
+  /^[[:space:]]*#endif/ { if (d > 0) { delete dead[d]; delete self[d]; d-- } next }
+  {
+    for (i = 1; i <= d; i++) if (dead[i]) next     # inside a dead branch
+    if ($0 ~ /^[[:space:]]*;/) next                # commented out
+    if ($0 !~ /^[[:space:]]*Name:/) next
+    if (match($0, /Languages\\[A-Za-z]+\.islu?/)) {
+      f = substr($0, RSTART, RLENGTH)
+      sub(/.*\\/, "", f)
+      print f
+    }
+  }
+' "$ISS" | sort -u)" || true
 [ -n "$needed" ] || { warn "common.iss references no Languages\\*.isl — nothing to install"; exit 0; }
 printf '  %s referenced\n' "$(printf '%s\n' "$needed" | wc -l | tr -d ' ')"
 
