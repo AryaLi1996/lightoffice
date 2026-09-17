@@ -205,6 +205,45 @@ jobs:
       # A bare ${GITHUB_SHA::7} fails whenever the short sha begins with a
       # letter, which is most of the time. Keep the sha for traceability, but
       # behind a version that dpkg accepts.
+      # Published for the Windows job, which cannot build these itself: the JS
+      # stage overran GitHub's hard 360 minute job cap twice (runs 35082531652
+      # and 35089706123), reaching grunt's sprite tasks at ~138 minutes and
+      # still being in them when the runner was killed.
+      #
+      # Taken from HERE, after "Build desktop editors", and not from the
+      # prebuilt image: the image is built from upstream at the pinned tag,
+      # while apply_overlay.sh trims the collaboration tabs, injects the cloud
+      # defaults into index.html and disables the plugin host -- all in web-apps
+      # sources that the JS stage then bundles. The image's copy predates every
+      # one of those, so shipping it would quietly undo the customization.
+      #
+      # Tarred first: this is tens of thousands of small files, and
+      # upload-artifact uploads them one by one.
+      # Default (success only) on purpose: if the desktop build failed there are
+      # no assets to publish, and the Windows job should be skipped rather than
+      # started on a tree it cannot finish.
+      - name: Publish the web assets for the Windows build
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /opt/lightoffice/src
+        run: |
+          js="$LIGHTOFFICE_SRC/build_tools/out/js"
+          if [ ! -d "$js" ] || [ -z "$(ls -A "$js" 2>/dev/null)" ]; then
+            echo "::error::no web assets at $js -- the Windows job depends on these"
+            exit 1
+          fi
+          du -sh "$js"
+          ls "$js"
+          tar -czf web-assets.tgz -C "$LIGHTOFFICE_SRC/build_tools/out" js
+          printf 'web-assets.tgz: %s MiB\n' "$(( $(stat -c%s web-assets.tgz) / 1048576 ))"
+
+      - name: Upload the web assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-assets
+          path: web-assets.tgz
+          retention-days: 5
+
       - name: Package installers
         shell: bash
         env:
@@ -508,6 +547,10 @@ jobs:
     name: Build Windows
     runs-on: windows-2022
     timeout-minutes: 360
+    # For the web assets only. Windows cannot build them inside a 360 minute
+    # job, so it waits ~55 minutes for the Linux job rather than spending six
+    # hours failing to produce them itself.
+    needs: build-linux
     steps:
       - uses: actions/checkout@v4
         with:
@@ -795,6 +838,30 @@ jobs:
       # Preflight separately, as on macOS: a missing prerequisite that surfaces
       # two hours into a build costs a whole runner for an answer that was
       # available in seconds.
+      # The JS stage, built once on Linux after the overlay. Restored into the
+      # exact path build_js.py would have written and deploy_desktop.py reads:
+      # build_tools/out/js/<branding>/desktop/{sdkjs,web-apps,index.html}. The
+      # whole js/ directory is carried over so the branding subdirectory name
+      # does not have to be guessed here.
+      - name: Restore the web assets built on Linux
+        if: steps.deps.outputs.qt == 'ok'
+        uses: actions/download-artifact@v4
+        with:
+          name: web-assets
+
+      - name: Unpack the web assets
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: |
+          mkdir -p "$LIGHTOFFICE_SRC/build_tools/out"
+          tar -xzf web-assets.tgz -C "$LIGHTOFFICE_SRC/build_tools/out"
+          js="$LIGHTOFFICE_SRC/build_tools/out/js"
+          [ -d "$js" ] || { echo "::error::web-assets.tgz did not contain js/"; exit 1; }
+          du -sh "$js"
+          find "$js" -maxdepth 2 -mindepth 1 -type d | sed "s#$js#js#"
+
       - name: Preflight the Windows build
         if: steps.deps.outputs.qt == 'ok'
         shell: bash
@@ -805,10 +872,21 @@ jobs:
       - name: Build Windows (x64)
         if: steps.deps.outputs.qt == 'ok'
         continue-on-error: true
+        # Under the job's own 360 minute cap, so the report step still runs.
+        # Run 35082531652 hit the job cap at exactly 360 minutes: the step was
+        # cancelled, the report step was SKIPPED, and the build log tail added
+        # for precisely this purpose was never printed -- six hours of runner
+        # for no information at all. A GitHub-hosted job cannot be given more
+        # than 360 minutes, so the only way to learn anything from a build that
+        # does not fit is to stop it early enough to be asked where it got to.
+        timeout-minutes: 300
         shell: bash
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
           LIGHTOFFICE_VERSION: 1.0.0.0
+          # Read by build_tools/scripts/build_js.py, which returns immediately.
+          # The assets it would have produced were restored above.
+          OO_NO_BUILD_JS: "1"
         # Tee'd so the report step can show where it stopped. A job log is
         # served as a ~45KB tail and this job's env echo alone is ~40KB per
         # step, so by the time the report step has printed its header the
