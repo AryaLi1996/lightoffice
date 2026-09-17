@@ -879,7 +879,13 @@ jobs:
         # for no information at all. A GitHub-hosted job cannot be given more
         # than 360 minutes, so the only way to learn anything from a build that
         # does not fit is to stop it early enough to be asked where it got to.
-        timeout-minutes: 300
+        # 340, not 300: run 35201112743 was killed at the 300 minute mark with
+        # ISCC still running (the cleanup line "Terminate orphan process: pid
+        # (2028) (ISCC)" is how we know). Compilation had finished and Inno
+        # Setup was compressing a ~1GB payload at lzma2/ultra64 with
+        # SolidCompression, which is the slowest setting it offers. The job cap
+        # is 360 and the report and upload steps need a few minutes of it.
+        timeout-minutes: 340
         shell: bash
         env:
           LIGHTOFFICE_SRC: /c/lightoffice/src
@@ -933,7 +939,17 @@ jobs:
                 echo "::warning::windows: skipped, no Qt on this runner"
                 ;;
               empty)
-                echo "**No installer produced.** The last of the build step:"
+                echo "**No installer produced.** Where the time went:"
+                echo
+                echo '```'
+                # build_windows.sh times every phase; the markers are just
+                # unreachable in the middle of a ~45KB log tail. Pulled out
+                # here so a run that overruns says which phase ate the budget
+                # instead of leaving it to be inferred from a stale tail.
+                grep '^=== phase' "$RUNNER_TEMP/windows-build.log" 2>/dev/null || echo "(no phase markers)"
+                echo '```'
+                echo
+                echo "And the last of the build step:"
                 echo
                 echo '```'
                 tail -40 "$RUNNER_TEMP/windows-build.log" 2>/dev/null || echo "(no build log)"
