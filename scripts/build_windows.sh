@@ -212,7 +212,25 @@ fi
 # "/bin/sh: grunt: command not found" (Error (grunt): 127). Windows has not got
 # that far yet, so check for it now rather than learn the same thing later.
 # Checked by presence: `grunt --version` exits non-zero with no local Gruntfile.
-if command -v grunt >/dev/null 2>&1; then
+#
+# Unless the JS stage is being skipped, which is now the normal path on
+# Windows: the stage does not fit. Runs 35082531652 and 35089706123 both hit
+# the GitHub job cap at exactly 360 minutes with their logs stalled in grunt's
+# sprite tasks, having reached them at about 138 minutes -- so the stage alone
+# ran over three and a half hours before being killed, twice. Its output is
+# platform-independent (sdkjs, web-apps, two HTML files), so the Linux job
+# builds it once, after the overlay, and publishes it; see the workflow.
+if [ "${OO_NO_BUILD_JS:-}" = "1" ]; then
+  _js_dir="$SRC/build_tools/out/js"
+  if [ -d "$_js_dir" ] && [ -n "$(ls -A "$_js_dir" 2>/dev/null)" ]; then
+    ok "JS stage skipped — prebuilt web assets present ($(du -sh "$_js_dir" 2>/dev/null | cut -f1))"
+  else
+    bad "OO_NO_BUILD_JS=1 but $_js_dir is empty — the web assets were not restored"
+    echo "      deploy_desktop.py copies out/js/<branding>/desktop/{sdkjs,web-apps}" >&2
+    echo "      into the package; without them the editors ship with no UI." >&2
+    fatal=1
+  fi
+elif command -v grunt >/dev/null 2>&1; then
   ok "grunt ($(command -v grunt))"
 else
   bad "grunt not found — the JS stage needs it: npm install -g grunt-cli"; fatal=1
