@@ -899,16 +899,16 @@ jobs:
         # build step's own output is long gone -- run 35066117056 said "no
         # installer produced" and the reason was unreachable. pipefail is on
         # (the shell is `bash -e -o pipefail`), so tee does not mask the exit.
-        run: scripts/build_windows.sh --arch x64 2>&1 | tee "$RUNNER_TEMP/windows-build.log"
+        run: scripts/build_windows.sh --arch x64 --stage-only 2>&1 | tee "$RUNNER_TEMP/windows-build.log"
 
       # Say plainly whether an installer appeared. The step this replaces
       # reported SUCCESS while producing nothing, which is the failure mode
       # worth not repeating.
-      - name: Report the Windows build outcome
+      - name: Report the Windows staging outcome
         shell: bash
         run: |
           shopt -s nullglob
-          found=(artifacts/WPS-Lite-win-*)
+          found=(/c/lightoffice/src/desktop-apps/package/build/x64/desktop)
 
           # Classify BEFORE the summary, not inside it. A `{ ... } | tee` block
           # runs in a subshell, so neither an exit nor a variable assignment in
@@ -928,18 +928,18 @@ jobs:
             case "$state" in
               produced)
                 for f in "${found[@]}"; do
-                  printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
+                  printf -- '- staged `%s` (%s)\n' "$f" "$(du -sh "$f" | cut -f1)"
                 done
                 echo
-                echo "Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
-                echo "we do not have, so SmartScreen warns on first run."
+                echo "Packaging runs in the Package Windows job, which gets its own"
+                echo "360 minute budget -- ISCC needs about 195 of them."
                 ;;
               skipped)
                 echo "**No Qt, so the build was skipped.** See the dependency step."
                 echo "::warning::windows: skipped, no Qt on this runner"
                 ;;
               empty)
-                echo "**No installer produced.** Where the time went:"
+                echo "**Nothing staged.** Where the time went:"
                 echo
                 echo '```'
                 # build_windows.sh times every phase; the markers are just
@@ -954,7 +954,7 @@ jobs:
                 echo '```'
                 tail -40 "$RUNNER_TEMP/windows-build.log" 2>/dev/null || echo "(no build log)"
                 echo '```'
-                echo "::error::windows: build produced no installer"
+                echo "::error::windows: build staged nothing to package"
                 ;;
             esac
           } | tee -a "$GITHUB_STEP_SUMMARY"
@@ -968,18 +968,143 @@ jobs:
           [ "$state" = empty ] && exit 1
           exit 0
 
-      # Guarded rather than deleted: when the native build above starts
-      # producing artifacts/, this uploads them with no further change.
-      #
-      # The pattern is WPS-Lite-* and NOT artifacts/**. The first guard I wrote
-      # used artifacts/** and did not work: artifacts/.gitkeep is tracked
-      # (.gitignore keeps the directory with /artifacts/* plus
-      # !/artifacts/.gitkeep), so after checkout the directory always contains
-      # one file, hashFiles returned a hash, the condition was true, and the
-      # step ran anyway — then upload-artifact skipped .gitkeep as a hidden file
-      # and warned "No files were found" exactly as before. Observed in run
-      # 34432524996. Matching the installer names instead tests for the thing we
-      # actually mean, and cannot be satisfied by a placeholder file.
+      # Handed to the packaging job. Tarred first: this is the deploy tree, tens
+      # of thousands of small files, and upload-artifact uploads them one by one.
+      - name: Pack the staged tree for the packaging job
+        if: steps.deps.outputs.qt == 'ok'
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: |
+          staged="$LIGHTOFFICE_SRC/desktop-apps/package/build/x64"
+          [ -d "$staged/desktop" ] || { echo "::error::nothing staged at $staged"; exit 1; }
+          du -sh "$staged"
+          tar -czf "$RUNNER_TEMP/windows-staged.tgz" -C "$LIGHTOFFICE_SRC/desktop-apps/package/build" x64
+          printf 'windows-staged.tgz: %s MiB\n' "$(( $(stat -c%s "$RUNNER_TEMP/windows-staged.tgz") / 1048576 ))"
+          cp "$RUNNER_TEMP/windows-staged.tgz" .
+
+      - name: Upload the staged tree
+        if: steps.deps.outputs.qt == 'ok'
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-staged
+          path: windows-staged.tgz
+          retention-days: 5
+
+  # Packaging is its own job because it does not fit in the same one as the
+  # compile. Measured over two runs: make.py takes 139-149 minutes and ISCC
+  # another 190+, and both runs were killed at the step timeout with ISCC still
+  # compressing. A GitHub-hosted job cannot exceed 360 minutes.
+  #
+  # Splitting rather than compressing less: the installer this produces is
+  # exactly what the single job would have produced, same lzma2/ultra64, same
+  # contents. LZMANumBlockThreads=4 was tried first (run 35320983745) and bought
+  # nothing, because SolidCompression=yes leaves one LZMA2 stream with no
+  # independent blocks to parallelise.
+  #
+  # No MSVC, no Qt, no boost here -- this job only needs Inno Setup, the
+  # language files, the upstream package scripts, and the tree the compile job
+  # staged.
+  package-windows:
+    name: Package Windows
+    runs-on: windows-2022
+    timeout-minutes: 360
+    needs: build-windows
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Inno Setup
+        shell: bash
+        run: |
+          choco install innosetup --no-progress -y >/tmp/inno.log 2>&1 || tail -20 /tmp/inno.log
+          for c in "/c/Program Files (x86)/Inno Setup 6" "/c/Program Files/Inno Setup 6"; do
+            [ -x "$c/ISCC.exe" ] && echo "Inno Setup: $c" && ok=1
+          done
+          [ -n "${ok:-}" ] || { echo "::error::Inno Setup did not install"; exit 1; }
+
+      # The upstream package scripts and common.iss, which is what ISCC reads.
+      - name: Bootstrap the upstream tree
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: |
+          mkdir -p /c/lightoffice
+          scripts/bootstrap.sh
+          scripts/apply_overlay.sh
+
+      - name: Install the Inno Setup languages common.iss requires
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: scripts/install_inno_languages.sh
+
+      - name: Download the staged tree
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-staged
+
+      - name: Unpack the staged tree
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+        run: |
+          mkdir -p "$LIGHTOFFICE_SRC/desktop-apps/package/build"
+          tar -xzf windows-staged.tgz -C "$LIGHTOFFICE_SRC/desktop-apps/package/build"
+          staged="$LIGHTOFFICE_SRC/desktop-apps/package/build/x64"
+          [ -d "$staged/desktop" ] || { echo "::error::windows-staged.tgz did not contain x64/desktop"; exit 1; }
+          du -sh "$staged"
+
+      - name: Package Windows (x64)
+        continue-on-error: true
+        shell: bash
+        env:
+          LIGHTOFFICE_SRC: /c/lightoffice/src
+          LIGHTOFFICE_VERSION: 1.0.0.0
+        # 330 of the job's 360, leaving the report and upload steps room to run
+        # even when ISCC overruns -- the whole point of the earlier step-level
+        # cap, which is what finally made these failures legible.
+        timeout-minutes: 330
+        run: scripts/package_windows.sh --arch x64 2>&1 | tee "$RUNNER_TEMP/windows-package.log"
+
+      - name: Report the Windows packaging outcome
+        shell: bash
+        run: |
+          shopt -s nullglob
+          found=(artifacts/WPS-Lite-win-*)
+          if [ ${#found[@]} -gt 0 ]; then state=produced; else state=empty; fi
+          {
+            echo "### Windows packaging"
+            echo
+            case "$state" in
+              produced)
+                for f in "${found[@]}"; do
+                  printf -- '- produced `%s` (%s MiB)\n' "$f" "$(( $(stat -c%s "$f") / 1048576 ))"
+                done
+                echo
+                echo "Unsigned: upstream's -Sign switch is opt-in and needs a certificate"
+                echo "we do not have, so SmartScreen warns on first run."
+                ;;
+              empty)
+                echo "**No installer produced.** Where the time went:"
+                echo
+                echo '```'
+                grep '^=== phase' "$RUNNER_TEMP/windows-package.log" 2>/dev/null || echo "(no phase markers)"
+                echo '```'
+                echo
+                echo "And the last of the packaging step:"
+                echo
+                echo '```'
+                tail -40 "$RUNNER_TEMP/windows-package.log" 2>/dev/null || echo "(no packaging log)"
+                echo '```'
+                echo "::error::windows: packaging produced no installer"
+                ;;
+            esac
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          [ "$state" = empty ] && exit 1
+          exit 0
+
       - name: Upload Windows artifacts
         if: hashFiles('artifacts/WPS-Lite-*') != ''
         uses: actions/upload-artifact@v4
