@@ -88,15 +88,34 @@ phase_begin make_inno.ps1
     -CompanyName "$COMPANY" -ProductName "$PRODUCT" )
 phase_end
 
-# make_inno.ps1 names its output <Company>-<Product>-<Version>-<Arch>.exe.
-# Renamed to what release.yml and AC 5.1 expect rather than teaching them a
-# second name -- one of them would inevitably drift.
-built="$STAGED/$COMPANY-$PRODUCT-$VERSION-$ARCH.exe"
-if [ ! -f "$built" ]; then
-  echo "make_inno.ps1 finished but $built does not exist" >&2
-  ls -la "$STAGED" 2>/dev/null >&2 || true
+# make_inno.ps1 names its output <Company>-<Product>-<Version>-<Arch>.exe and
+# writes it beside common.iss, in inno/ -- NOT into build/<arch>/. Run
+# 35381703378 is what settled that: ISCC reported
+#
+#   Successful compile (296.469 sec). Resulting Setup program filename is:
+#   C:\lightoffice\src\desktop-apps\package\inno\ONLYOFFICE-...-x64.exe
+#
+# and this script then declared failure because it was looking in build/x64.
+# That expectation came from the single-job script and had never been reached
+# before, so it had never been wrong in practice.
+#
+# Both locations are searched rather than one being swapped for the other:
+# upstream is free to change where it puts the file, and a packaging run that
+# finds nothing after a successful compile is the most annoying way to lose one.
+name="$COMPANY-$PRODUCT-$VERSION-$ARCH.exe"
+built=""
+for c in "$PKG/inno/$name" "$STAGED/$name"; do
+  [ -f "$c" ] && { built="$c"; break; }
+done
+if [ -z "$built" ]; then
+  echo "make_inno.ps1 finished but $name is in neither place:" >&2
+  echo "  $PKG/inno/$name" >&2
+  echo "  $STAGED/$name" >&2
+  echo "what ISCC did leave behind:" >&2
+  find "$PKG" -maxdepth 3 -name '*.exe' -newermt '-1 hour' 2>/dev/null >&2 || true
   exit 1
 fi
+ok "built: $built"
 mkdir -p "$ROOT/artifacts"
 cp "$built" "$ROOT/artifacts/WPS-Lite-win-$ARCH.exe"
 ok "installer: artifacts/WPS-Lite-win-$ARCH.exe ($(du -h "$built" | cut -f1))"
