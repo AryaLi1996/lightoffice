@@ -979,9 +979,17 @@ jobs:
           staged="$LIGHTOFFICE_SRC/desktop-apps/package/build/x64"
           [ -d "$staged/desktop" ] || { echo "::error::nothing staged at $staged"; exit 1; }
           du -sh "$staged"
-          tar -czf "$RUNNER_TEMP/windows-staged.tgz" -C "$LIGHTOFFICE_SRC/desktop-apps/package/build" x64
-          printf 'windows-staged.tgz: %s MiB\n' "$(( $(stat -c%s "$RUNNER_TEMP/windows-staged.tgz") / 1048576 ))"
-          cp "$RUNNER_TEMP/windows-staged.tgz" .
+          # Written into the workspace, NOT $RUNNER_TEMP. That is D:\a\_temp on
+          # a Windows runner, and GNU tar reads a leading "D:" as a remote
+          # host:path -- run 35358303274 spent 159 minutes compiling and then
+          # died in four seconds with
+          #     tar (child): Cannot connect to D: resolve failed
+          # The tee of the build log to the same variable is fine, because only
+          # tar parses colons that way. A relative path cannot have the problem,
+          # and upload-artifact wants the file here anyway, so this also drops
+          # the copy that followed.
+          tar -czf windows-staged.tgz -C "$LIGHTOFFICE_SRC/desktop-apps/package/build" x64
+          printf 'windows-staged.tgz: %s MiB\n' "$(( $(stat -c%s windows-staged.tgz) / 1048576 ))"
 
       - name: Upload the staged tree
         if: steps.deps.outputs.qt == 'ok'
