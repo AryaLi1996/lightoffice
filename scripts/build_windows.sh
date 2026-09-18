@@ -470,6 +470,15 @@ fi
 ok "core built: $CORE_OUT ($(du -sh "$CORE_OUT" | cut -f1))"
 
 # --------------------------------------------------------------- package ----
+# Before packaging, because it changes what ISCC is asked to do. The compile is
+# not the problem: run 35238369724 measured make.py at 8917s (149 min) and then
+# spent the remaining 190+ minutes inside ISCC before the step timeout killed
+# it. common.iss asks for lzma2/ultra64 over ~1GB with LZMANumBlockThreads
+# unset, which means one core.
+phase_begin patch-inno-threads
+"$ROOT/scripts/patch_inno_threads.sh" "$SRC"
+phase_end
+
 phase_begin make.ps1
 ( cd "$PKG" && powershell -NoProfile -ExecutionPolicy Bypass -File ./make.ps1 \
     -Version "$VERSION" -Arch "$ARCH" \
