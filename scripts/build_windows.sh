@@ -53,27 +53,25 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${LIGHTOFFICE_SRC:-$(dirname "$ROOT")/onlyoffice-src}"
 BUILD_TOOLS="${LIGHTOFFICE_BUILD_TOOLS:-$SRC/build_tools}"
 CHECK_ONLY=0
+STAGE_ONLY=0
 ARCH="x64"
 while [ $# -gt 0 ]; do
   case "$1" in
     --check-only) CHECK_ONLY=1; shift ;;
+    # Stop after make.ps1 has staged the tree, leaving make_inno.ps1 to
+    # package_windows.sh in a job with its own 360 minute budget. See the note
+    # above that step.
+    --stage-only) STAGE_ONLY=1; shift ;;
     --arch) ARCH="$2"; shift 2 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 
-case "$ARCH" in
-  x64) PLATFORM="win_64"; OUT_DIR="win_64" ;;
-  x86) PLATFORM="win_32"; OUT_DIR="win_32" ;;
-  *) echo "unknown --arch $ARCH (expected x64 or x86)" >&2; exit 2 ;;
-esac
-
-# make.ps1 resolves its source as out/<prefix>/<CompanyName>/<ProductName>, so
-# these two must match what the build actually deploys, not what we call the
-# product elsewhere.
-COMPANY="${LIGHTOFFICE_WIN_COMPANY:-ONLYOFFICE}"
-PRODUCT="${LIGHTOFFICE_WIN_PRODUCT:-DesktopEditors}"
-VERSION="${LIGHTOFFICE_VERSION:-1.0.0.0}"
+# PLATFORM, OUT_DIR, COMPANY, PRODUCT, VERSION, PKG, STAGED and find_inno.
+# Shared with package_windows.sh, which has to name the same directories and the
+# same output file; see the header of that file.
+# shellcheck source=scripts/lib/win_env.sh
+. "$ROOT/scripts/lib/win_env.sh"
 
 ok()   { printf '  \033[32m+\033[0m %s\n' "$*"; }
 bad()  { printf '  \033[31mx\033[0m %s\n' "$*"; }
@@ -101,7 +99,6 @@ esac
 # 1. The upstream tree.
 [ -d "$BUILD_TOOLS" ] && ok "build_tools present ($BUILD_TOOLS)" \
   || { bad "build_tools missing — run scripts/bootstrap.sh"; fatal=1; }
-PKG="$SRC/desktop-apps/package"
 if [ -f "$PKG/make.ps1" ] && [ -f "$PKG/make_inno.ps1" ]; then
   ok "desktop-apps/package present (make.ps1, make_inno.ps1)"
 else
@@ -470,21 +467,36 @@ fi
 ok "core built: $CORE_OUT ($(du -sh "$CORE_OUT" | cut -f1))"
 
 # --------------------------------------------------------------- package ----
-# Before packaging, because it changes what ISCC is asked to do. The compile is
-# not the problem: run 35238369724 measured make.py at 8917s (149 min) and then
-# spent the remaining 190+ minutes inside ISCC before the step timeout killed
-# it. common.iss asks for lzma2/ultra64 over ~1GB with LZMANumBlockThreads
-# unset, which means one core.
-phase_begin patch-inno-threads
-"$ROOT/scripts/patch_inno_threads.sh" "$SRC"
-phase_end
-
+# No LZMANumBlockThreads here any more. It was tried in run 35320983745 and
+# bought nothing -- ISCC still ran ~195 minutes and was still going when the
+# step timeout fired. SolidCompression=yes makes the payload a single LZMA2
+# stream, so there are no independent blocks for extra threads to take; the
+# cleanup line "Terminate orphan process: pid (7488) (islzma64)" is that one
+# compressor. Setting it only cost compression ratio, so upstream's settings
+# are left exactly as they are and the work is split across two jobs instead.
 phase_begin make.ps1
 ( cd "$PKG" && powershell -NoProfile -ExecutionPolicy Bypass -File ./make.ps1 \
     -Version "$VERSION" -Arch "$ARCH" \
     -CompanyName "$COMPANY" -ProductName "$PRODUCT" \
     -SourceDir "$(cygpath -w "$CORE_OUT")" )
 phase_end
+
+if [ "$STAGE_ONLY" = "1" ]; then
+  # The compile is 139-149 minutes and ISCC is another 190+; runs 35238369724
+  # and 35320983745 both died at the step timeout with ISCC still compressing,
+  # and a GitHub-hosted job cannot exceed 360 minutes. So the two halves run in
+  # separate jobs, each with its own budget. package_windows.sh takes it from
+  # here.
+  if [ ! -d "$STAGED/desktop" ]; then
+    echo "make.ps1 finished but produced no $STAGED/desktop" >&2
+    ls -la "$STAGED" 2>/dev/null >&2 || echo "  (no $STAGED at all)" >&2
+    exit 1
+  fi
+  ok "staged: $STAGED ($(du -sh "$STAGED" | cut -f1))"
+  echo
+  echo "Windows staging complete. Next: scripts/package_windows.sh"
+  exit 0
+fi
 
 phase_begin make_inno.ps1
 ( cd "$PKG" && INNOPATH="$(cygpath -w "$INNO")" \
